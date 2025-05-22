@@ -9,7 +9,7 @@ class Faiss_Manager:
         # Wrap it with IndexIDMap to store custom IDs
         self.index = faiss.IndexIDMap(base_index)
         self.embedding_model = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2"
+            "sentence-transformers/average_word_embeddings_glove.840B.300d"
         )
 
     def save_to_file(self, path: str):
@@ -27,7 +27,7 @@ class Faiss_Manager:
     def add_from_list(self, list_items: list):
         # TODO Add verification if Id is already present, if so delete maybe?
         for item in list_items:
-            text_to_embed = item["title"] + item["description"]
+            text_to_embed = item["title"] + " " + item["description"]
             item_id = item["id"]
             self._add_text(text_to_embed, item_id)
 
