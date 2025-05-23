@@ -1,6 +1,7 @@
 import logging
 
 class Config:
+    embed_model = "sentence-transformers/all-MiniLM-L6-v2"
 
     @classmethod
     def init_logging(logging_level=logging.ERROR):
