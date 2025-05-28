@@ -1,7 +1,7 @@
 import faiss
 import numpy
 from sentence_transformers import SentenceTransformer
-from config import Config
+from app.config.config import Config
 
 class Faiss_Manager:
     def __init__(self, dimensionality: int):
