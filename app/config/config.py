@@ -12,3 +12,8 @@ class Config:
                 logging.StreamHandler()
             ]
         )
+    class MySQL:
+        user = ""
+        password = ""
+        database = ""
+        host = ""
