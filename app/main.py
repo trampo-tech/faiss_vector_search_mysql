@@ -7,7 +7,7 @@ from app.utils.bm25_manager import BM25Manager
 from app.utils.faissManager import Faiss_Manager
 from app.utils.simulate_sql import emulate_rental_listings_db
 from app.utils.database_connector import DatabaseConnector
-from config.config import Config
+from app.config.config import Config
 
 app = FastAPI()
 
@@ -44,7 +44,7 @@ if sql_db.connection and sql_db.connection.is_connected():
 
 if table_data_from_db:
     table_result = table_data_from_db
-    
+
 else:
     print("Using emulated SQL data as a fallback.")
     table_result = emulate_rental_listings_db(num_itens=1000)
@@ -127,7 +127,7 @@ async def search_items(query: str):
         query_text=query,
         bm25_manager_instance=bm25_search_manager,
         faiss_manager_instance=faiss_manager,
-        data_source=my_mysql_emulation,
+        data_source=table_result,
     )
 
     api_results = [item_to_response(item) for item in results]
