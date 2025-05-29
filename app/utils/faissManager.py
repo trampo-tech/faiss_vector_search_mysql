@@ -27,7 +27,8 @@ class Faiss_Manager:
     def add_from_list(self, list_items: list):
         # TODO Add verification if Id is already present, if so delete maybe?
         for item in list_items:
-            text_to_embed = item["titulo"] + " " + item["descricao"]
+            # Changed 'titulo' to 'nome'
+            text_to_embed = item["nome"] + " " + item["descricao"]
             item_id = item["id"]
             self._add_text(text_to_embed, item_id)
 
