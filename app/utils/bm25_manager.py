@@ -12,7 +12,7 @@ class BM25Manager:
     def _build_index(self, corpus_data: list):
         print("Building BM25 index...")
         # Changed 'titulo' to 'nome'
-        corpus_texts = [(listing["nome"] + " " + listing["descricao"]).lower() for listing in corpus_data]
+        corpus_texts = [(listing["titulo"] + " " + listing["descricao"]).lower() for listing in corpus_data]
         tokenized_corpus = [doc.split(" ") for doc in corpus_texts]
         self.bm25_okapi_model = BM25Okapi(tokenized_corpus)
         self.corpus_ids = [listing["id"] for listing in corpus_data]
@@ -33,7 +33,7 @@ class BM25Manager:
                 self.bm25_okapi_model = pickle.load(f_bm25)
                 self.corpus_ids = pickle.load(f_ids)
             print("BM25 index loaded.")
-            return True
+            return False ## TODO change this later
         return False
 
     def initialize_index(self, corpus_data: list):

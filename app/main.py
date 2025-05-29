@@ -5,7 +5,7 @@ from typing import List
 
 from app.utils.bm25_manager import BM25Manager
 from app.utils.faissManager import Faiss_Manager
-from app.utils.simulate_sql import emulate_rental_listings_db
+# from app.utils.simulate_sql import emulate_rental_listings_db
 from app.utils.database_connector import DatabaseConnector
 from app.config.config import Config
 
@@ -25,10 +25,10 @@ class RentalListingResponse(BaseModel):
 
 
 sql_db = DatabaseConnector(
-    user=config.MySQL.user,
-    password=config.MySQL.password,
-    database=config.MySQL.database,
-    host=config.MySQL.host
+    user='root',
+    password='ROOT',
+    database='alugo',
+    host='localhost'
 )
 
 sql_db.connect()
@@ -36,7 +36,7 @@ sql_db.connect()
 table_data_from_db = None
 if sql_db.connection and sql_db.connection.is_connected():
     print("Attempting to fetch data from the database...")
-    table_data_from_db = sql_db.get_all_from_table("items") 
+    table_data_from_db = sql_db.get_all_from_table("itens") 
     if table_data_from_db:
         print(f"Successfully fetched {len(table_data_from_db)} items from the database.")
     else:
@@ -45,22 +45,18 @@ if sql_db.connection and sql_db.connection.is_connected():
 if table_data_from_db:
     table_result = table_data_from_db
 
-else:
-    print("Using emulated SQL data as a fallback.")
-    table_result = emulate_rental_listings_db(num_itens=1000)
-
 if not table_result:
-    raise RuntimeError("Failed to load data from both database and emulation.")
+    raise RuntimeError("Failed to load data from database.")
 
-
-table_result = emulate_rental_listings_db(num_itens=1000)
 
 faiss_manager = Faiss_Manager(dimensionality=384)
 faiss_manager.add_from_list(table_result)
-
+#
 bm25_search_manager = BM25Manager()
 bm25_search_manager.initialize_index(corpus_data=table_result)
 
+# Build a mapping from id to item for fast lookup
+id_to_item = {item["id"]: item for item in table_result}
 
 def hybrid_search(
     query_text: str,
@@ -86,25 +82,13 @@ def hybrid_search(
 
     final_results = []
     for res_id in combined_ids:
-        if 1 <= res_id <= len(data_source):
-            item_data = data_source[res_id - 1]
-            if item_data["id"] == res_id:
-                final_results.append(item_data)
-            else:
-                found_item = next(
-                    (item for item in data_source if item["id"] == res_id), None
-                )
-                if found_item:
-                    final_results.append(found_item)
-                else:
-                    print(
-                        f"Warning: ID {res_id} not found by direct index or fallback lookup in data_source."
-                    )
+        item_data = id_to_item.get(res_id)
+        if item_data:
+            final_results.append(item_data)
         else:
-            print(f"Warning: ID {res_id} out of bounds for data_source.")
+            print(f"Warning: ID {res_id} not found in data_source.")
 
     return final_results
-
 
 def item_to_response(item):
     # Remove 'embedding'
