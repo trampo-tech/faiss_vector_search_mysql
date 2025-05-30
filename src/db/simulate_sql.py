@@ -39,7 +39,7 @@ def emulate_rental_listings_db(num_itens=100, dimension=384):
 
         itens_data.append({
             "id": item_id,
-            "nome": nome,  
+            "titulo": nome,  
             "descricao": descricao,
             "categoria": random.choice(categorias_base),
             "preco_diaria": random.choice(precos_base), 

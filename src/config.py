@@ -6,6 +6,8 @@ import os
 class Config:
     embed_model = "sentence-transformers/all-MiniLM-L6-v2"
 
+    indexes_dir = "indexes"
+
     class MySQL:
         user = "root"
         password = "ROOT"
@@ -22,4 +24,5 @@ class Config:
                 logging.StreamHandler()
             ]
         )
+        return logging.getLogger()
     
