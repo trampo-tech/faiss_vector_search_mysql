@@ -14,14 +14,15 @@ app = FastAPI()
 config = Config
 
 
-# Define Pydantic model for output
 class RentalListingResponse(BaseModel):
     id: int
-    nome: str
+    titulo: str
     descricao: str
-    categoria: str
-    preco_diaria: float
-    disponivel: bool
+    categoria: str | None = None
+    preco_diario: float
+    condicoes_uso: str | None = None
+    status: str
+    usuario_id: int
 
 
 sql_db = DatabaseConnector(
@@ -91,9 +92,12 @@ def hybrid_search(
     return final_results
 
 def item_to_response(item):
-    # Remove 'embedding'
+    # Remove 'embedding' and datetime fields
     item = item.copy()
     item.pop("embedding", None)
+    item.pop("created_at", None)
+    item.pop("updated_at", None)
+    item.pop("last_embedding_generated_at", None)
     return RentalListingResponse(**item)
 
 
