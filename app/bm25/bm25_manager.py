@@ -98,6 +98,8 @@ class BM25Manager:
         if not self.bm25_okapi_model or not self.corpus_ids:
             raise Exception("Index not initialized. Call initialize_index() first.")
 
+        
+        doc_id = item["id"]
         texts = [
             str(item[f])
             for f in text_fields
@@ -108,12 +110,21 @@ class BM25Manager:
         new_tokens = " ".join(texts).split()
 
         # build a fresh model over old corpus + new doc
-        if item["id"] not in self.corpus_ids:
+        if doc_id not in self.corpus_ids:
             updated_corpus = self.bm25_okapi_model.corpus + [new_tokens]
             self.bm25_okapi_model = BM25Okapi(updated_corpus)
-            self.corpus_ids.append(item["id"])
+            self.corpus_ids.append(doc_id)
         else:
+            filtered_tokens = []
+            filtered_ids = []
+            for tokens, current_id in zip(self.bm25_okapi_model.corpus, self.corpus_ids):
+                if current_id != doc_id:
+                    filtered_tokens.append(tokens)
+                    filtered_ids.append(current_id)
 
-            
+            self.bm25_okapi_model = BM25Okapi(filtered_tokens + [new_tokens])
+            self.corpus_ids = filtered_ids
+            self.corpus_ids.append(doc_id)
+
         self._save_index()
         print(f"Added doc {item['id']} and saved updated BM25 index.")
