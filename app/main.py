@@ -23,7 +23,9 @@ sql_db = DatabaseConnector(
 sql_db.connect()
 
 
-def init_index_for_table(table_config: TableConfig, sql_db: DatabaseConnector, allow_load:bool = True):
+def init_index_for_table(
+    table_config: TableConfig, sql_db: DatabaseConnector, allow_load: bool = True
+):
     """
     Initializes FAISS and/or BM25 indexes for a given database table.
 
@@ -58,7 +60,7 @@ def init_index_for_table(table_config: TableConfig, sql_db: DatabaseConnector, a
             fm.load_from_file(faiss_path)
             logger.info(f"Loaded index from {faiss_path}.")
         else:
-            fm.add_from_list(data, text_fields=columns) # type: ignore
+            fm.add_from_list(data, text_fields=columns)  # type: ignore
             fm.save_to_file(faiss_path)
 
         faiss_managers[table_name] = fm
@@ -72,10 +74,14 @@ def init_index_for_table(table_config: TableConfig, sql_db: DatabaseConnector, a
     bm25_index_path = os.path.join(indexes_dir, f"{table_name}_bm25.pkl")
     corpus_ids_path = os.path.join(indexes_dir, f"{table_name}_ids.pkl")
 
-    if os.path.exists(bm25_index_path) and os.path.exists(corpus_ids_path) and allow_load:
+    if (
+        os.path.exists(bm25_index_path)
+        and os.path.exists(corpus_ids_path)
+        and allow_load
+    ):
         bm25._load_index()
     else:
-        bm25.initialize_index(data, columns=columns) # type: ignore
+        bm25.initialize_index(data, columns=columns)  # type: ignore
         bm25_managers[table_name] = bm25
 
 
@@ -102,6 +108,17 @@ class RentalListingResponse(BaseModel):
 
 
 def item_to_response(item):
+    """
+    Convert a database item to a RentalListingResponse by removing internal fields.
+    
+    Removes embedding data and timestamp fields that should not be exposed in the API response.
+    
+    Args:
+        item: Dictionary containing item data from the database
+        
+    Returns:
+        RentalListingResponse: Pydantic model instance with cleaned data
+    """
     # Remove 'embedding' and datetime fields
     item = item.copy()
     item.pop("embedding", None)
@@ -112,10 +129,23 @@ def item_to_response(item):
 
 
 @app.get("/indexes/{table_name}", response_model=dict)
-async def search_items(table_name: str, query: str, top: int = 10):
+async def search_items(table_name: str, query: str, top: int = 50):
     """
-    Do a hybrid search (BM25 + FAISS) on the named table’s indexes.
-    If a FAISS index is not available for the table, it will use BM25 search only.
+    Perform hybrid search (BM25 + FAISS) on the specified table's indexes.
+    
+    Combines lexical search using BM25 with semantic search using FAISS embeddings.
+    If FAISS index is not available for the table, falls back to BM25-only search.
+    
+    Args:
+        table_name: Name of the database table to search
+        query: Search query string
+        top: Maximum number of results to return (default: 50)
+        
+    Returns:
+        dict: Dictionary containing 'results' key with list of matching items
+        
+    Raises:
+        HTTPException: 404 if no BM25 index found for the specified table
     """
 
     logger.info(f"Search called on table='{table_name}' query='{query}' top={top}")
@@ -155,9 +185,24 @@ async def search_items(table_name: str, query: str, top: int = 10):
     return {"results": results}
 
 
-@app.post("/indexes/{table_name}") # should work also as an update
-async def add_to_index(table_name:str, item_id:int):
-
+@app.post("/indexes/{table_name}")  # should work also as an update
+async def add_to_index(table_name: str, item_id: int):
+    """
+    Add or update an item in the specified table's indexes.
+    
+    Updates both BM25 and FAISS indexes (if hybrid mode is enabled) with the
+    specified item from the database.
+    
+    Args:
+        table_name: Name of the database table
+        item_id: ID of the item to add/update in the indexes
+        
+    Returns:
+        dict: Success message confirming the operation
+        
+    Raises:
+        HTTPException: 404 if no index configuration found for the specified table
+    """
     logger.info(f"Add called on table='{table_name}' id='{item_id}'")
 
     for table in Config.tables_to_index:
@@ -168,24 +213,36 @@ async def add_to_index(table_name:str, item_id:int):
         raise fastapi.HTTPException(
             status_code=404,
             detail=f"No index found for table '{table_name}'. Consider adding it to the indexes list.",
-            )
-       
+        )
+
     bm = bm25_managers[table_name]
     # TODO Query item from db with id
-    item = {"something query db": "db"} 
+    item = {"something query db": "db"}
 
     bm.add_or_update_document(item, text_fields=table_config.columns)
 
     if table_config.hybrid:
         faiss = faiss_managers[table_name]
         faiss.add_or_update_item(item, table_config.columns)
-    
-    return {"message": "Item added/updated successfully."}	
+
+    return {"message": "Item added/updated successfully."}
 
 
 @app.post("/indexes/{table_name}/reindex")
-async def reindex_table(table_name:str):
-    table_config = Config.get_table_config(table_name) 
+async def reindex_table(table_name: str):
+    """
+    Completely rebuild indexes for a specific table.
+    
+    Clears existing indexes and rebuilds them from scratch using current database data.
+    This operation may take time for large datasets.
+    
+    Args:
+        table_name: Name of the database table to reindex
+        
+    Returns:
+        dict: Success message confirming the reindex operation
+    """
+    table_config = Config.get_table_config(table_name)
 
     # clear old index instance
     bm25_managers.pop(table_config.name)
@@ -193,11 +250,46 @@ async def reindex_table(table_name:str):
         faiss_managers.pop(table_config.name)
 
     init_index_for_table(table_config, sql_db, allow_load=False)
-    
+
+    return {"message": f"{table_name} reindexed successfully."}
+
 
 @app.post("/indexes/reindex")
 async def reindex_tables():
+    """
+    Rebuild indexes for all configured tables.
+    
+    Performs a complete reindex operation on all tables defined in the configuration.
+    This is a time-intensive operation that should be used sparingly.
+    
+    Returns:
+        dict: Success message confirming all tables have been reindexed
+    """
     for table_config in Config.tables_to_index:
         await reindex_table(table_config.name)
 
+    return {"message": "All tables reindexed successfully."}
 
+
+@app.get("/indexes/omnisearch")
+async def omnisearch(query: str, top: int = 25, tables: List[str] = ["itens", "users"]):
+    """
+    Perform search across multiple tables simultaneously.
+    
+    Executes the same search query against multiple specified tables and returns
+    consolidated results organized by table name.
+    
+    Args:
+        query: Search query string to execute across all tables
+        top: Maximum number of results per table (default: 25)
+        tables: List of table names to search (default: ["itens", "users"])
+        
+    Returns:
+        dict: Dictionary with table names as keys and search results as values
+    """
+    # You sure?
+    result = {}
+    for table in tables:
+        result[table] = search_items(table, query, top)
+
+    return result

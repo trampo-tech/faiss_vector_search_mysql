@@ -68,5 +68,8 @@ class DatabaseConnector:
              print(f"Invalid table name: {table_name}")
              return None
 
-        query = f"SELECT * FROM {table_name}"
+        query = f"SELECT * FROM {table_name}" 
         return self.execute_query(query)
+    
+    def get_with_id(id: int, table_name: str):
+        
