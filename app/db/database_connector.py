@@ -35,7 +35,7 @@ class DatabaseConnector:
         if not self.connection or not self.connection.is_connected():
             print("Not connected to the database.")
             return None
-        cursor = self.connection.cursor(dictionary=True)
+        cursor = self.connection.cursor(dictionary=True) # type: ignore
         try:
             cursor.execute(query, params or ())
             if query.strip().lower().startswith("select"):

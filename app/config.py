@@ -1,12 +1,24 @@
+from dataclasses import dataclass
+from typing import List
 import logging
-from dotenv import load_dotenv
-import os
+
+
+@dataclass(frozen=True)
+class TableConfig:
+    name: str
+    columns: List[str]
+    hybrid: bool
 
 
 class Config:
     embed_model = "sentence-transformers/all-MiniLM-L6-v2"
-
     indexes_dir = "indexes"
+
+
+    tables_to_index: List[TableConfig] = [
+        TableConfig(name="usuarios", columns=["nome"], hybrid=False),
+        TableConfig(name="itens", columns=["titulo", "descricao", "condicoes_uso"], hybrid=True),
+    ]
 
     class MySQL:
         user = "root"
@@ -14,9 +26,8 @@ class Config:
         database = "alugo"
         host = "localhost"
 
-        
     @classmethod
-    def init_logging(logging_level=logging.ERROR):
+    def init_logging(cls, logging_level: int = logging.ERROR) -> logging.Logger:
         logging.basicConfig(
             level=logging_level,
             format="%(asctime)s - %(levelname)s - %(message)s",
@@ -25,4 +36,3 @@ class Config:
             ]
         )
         return logging.getLogger()
-    

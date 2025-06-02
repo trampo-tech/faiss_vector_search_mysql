@@ -1,7 +1,7 @@
 import faiss
 import numpy
 from sentence_transformers import SentenceTransformer
-from src.config.config import Config
+from app.config.config import Config
 
 class Faiss_Manager:
     def __init__(self, dimensionality: int):
@@ -24,11 +24,22 @@ class Faiss_Manager:
         ids_to_add = numpy.array([item_id], dtype=numpy.int64)
         self.index.add_with_ids(embedding, ids_to_add)  # type: ignore # pylance complains here about something bogus
 
-    def add_from_list(self, list_items: list):
+    def add_from_list(self, list_items: list, text_fields: list[str] = ["titulo", "descricao"]):
         # TODO Add verification if Id is already present, if so delete maybe?
         for item in list_items:
-            # Changed 'titulo' to 'nome'
-            text_to_embed = item["titulo"] + " " + item["descricao"]
+            # Concatenate text from specified fields
+            texts_to_join = []
+            for field in text_fields:
+                if field in item and item[field] is not None:
+                    texts_to_join.append(str(item[field]))
+                else:
+                    print(f"Warning: Field '{field}' not found or is None in item with id {item.get('id', 'Unknown')}. Skipping field.")
+            
+            if not texts_to_join:
+                print(f"Warning: No text could be extracted for item with id {item.get('id', 'Unknown')} using fields {text_fields}. Skipping item.")
+                continue
+
+            text_to_embed = " ".join(texts_to_join)
             item_id = item["id"]
             self._add_text(text_to_embed, item_id)
 

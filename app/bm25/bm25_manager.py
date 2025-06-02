@@ -9,10 +9,22 @@ class BM25Manager:
         self.bm25_okapi_model = None
         self.corpus_ids = None
 
-    def _build_index(self, corpus_data: list):
+    def _build_index(self, corpus_data: list, text_fields: list[str] = ["titulo", "descricao"]):
         print("Building BM25 index...")
-        # Changed 'titulo' to 'nome'
-        corpus_texts = [(listing["titulo"] + " " + listing["descricao"]).lower() for listing in corpus_data]
+
+        corpus_texts = []
+        for item in corpus_data:
+            texts_to_join = []
+            for field in text_fields:
+                if field in item and item[field] is not None:
+                    texts_to_join.append(str(item[field]))
+                else:
+                    print(f"Warning: Field '{field}' not found or is None in item with id {item.get('id', 'Unknown')}. Skipping field.")
+            if not texts_to_join:
+                print(f"Warning: No text could be extracted for item with id {item.get('id', 'Unknown')} using fields {text_fields}. Skipping item.")
+                continue
+            corpus_texts.append(" ".join(texts_to_join))
+
         tokenized_corpus = [doc.split(" ") for doc in corpus_texts]
         self.bm25_okapi_model = BM25Okapi(tokenized_corpus)
         self.corpus_ids = [listing["id"] for listing in corpus_data]
@@ -36,14 +48,14 @@ class BM25Manager:
             return False ## TODO change this later
         return False
 
-    def initialize_index(self, corpus_data: list):
+    def initialize_index(self, corpus_data: list, columns: List[str]):  # noqa: F821
         """
         Initializes the BM25 index.
         Tries to load from file first, otherwise builds it from corpus_data.
         """
         if not self._load_index():
             if corpus_data:
-                self._build_index(corpus_data)
+                self._build_index(corpus_data, columns)
             else:
                 raise ValueError("Corpus data must be provided if index files do not exist.")
         elif not self.bm25_okapi_model or not self.corpus_ids: # If loading failed partially or files were empty
@@ -74,3 +86,34 @@ class BM25Manager:
         scored_listings.sort(key=lambda x: x[0], reverse=True)
         results_ids = [listing_id for score, listing_id in scored_listings[:top_n]]
         return results_ids
+    
+    def add_or_update_document(
+        self,
+        item: dict,
+        text_fields: list[str] = ["titulo", "descricao"]
+    ):
+        """
+        Incrementally add one document to the BM25 index.
+        """
+        if not self.bm25_okapi_model or not self.corpus_ids:
+            raise Exception("Index not initialized. Call initialize_index() first.")
+
+        texts = [
+            str(item[f])
+            for f in text_fields
+            if f in item and item[f] is not None
+        ]
+        if not texts:
+            raise ValueError(f"No valid text found in new item {item.get('id')}")
+        new_tokens = " ".join(texts).split()
+
+        # build a fresh model over old corpus + new doc
+        if item["id"] not in self.corpus_ids:
+            updated_corpus = self.bm25_okapi_model.corpus + [new_tokens]
+            self.bm25_okapi_model = BM25Okapi(updated_corpus)
+            self.corpus_ids.append(item["id"])
+        else:
+
+            
+        self._save_index()
+        print(f"Added doc {item['id']} and saved updated BM25 index.")
