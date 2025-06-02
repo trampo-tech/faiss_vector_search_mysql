@@ -216,8 +216,8 @@ async def add_to_index(table_name: str, item_id: int):
         )
 
     bm = bm25_managers[table_name]
-    # TODO Query item from db with id
-    item = {"something query db": "db"}
+    
+    item = sql_db.get_with_id(item_id, table_name) # TODO Look better into this
 
     bm.add_or_update_document(item, text_fields=table_config.columns)
 
