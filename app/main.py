@@ -9,7 +9,7 @@ from app.faiss.faissManager import Faiss_Manager
 
 # from app.utils.simulate_sql import emulate_rental_listings_db
 from app.db.database_connector import DatabaseConnector
-from config import Config
+from config import Config, TableConfig
 
 app = FastAPI()
 
@@ -23,7 +23,7 @@ sql_db = DatabaseConnector(
 sql_db.connect()
 
 
-def init_index_for_table(table_name: str, hybrid: bool, columns:List[str], sql_db: DatabaseConnector):
+def init_index_for_table(table_config: TableConfig, sql_db: DatabaseConnector, allow_load:bool = True):
     """
     Initializes FAISS and/or BM25 indexes for a given database table.
 
@@ -41,16 +41,20 @@ def init_index_for_table(table_name: str, hybrid: bool, columns:List[str], sql_d
     Raises:
         RuntimeError: If no data is found in the specified table.
     """
-    data = sql_db.get_all_from_table(table_name)
+    table_name = table_config.name
+    columns = table_config.columns
+    indexes_dir = Config.indexes_dir
+
+    data = sql_db.get_all_from_table(table_config.name)
     if not data:
         raise RuntimeError(f"No data for table '{table_name}'")
 
     # 2) FAISS
-    if hybrid:
+    if table_config.hybrid:
         fm = Faiss_Manager(dimensionality=384)
         faiss_path = os.path.join(Config.indexes_dir, f"{table_name}.index")
 
-        if os.path.exists(faiss_path):
+        if os.path.exists(faiss_path) and allow_load:
             fm.load_from_file(faiss_path)
             logger.info(f"Loaded index from {faiss_path}.")
         else:
@@ -61,14 +65,14 @@ def init_index_for_table(table_name: str, hybrid: bool, columns:List[str], sql_d
         # 3) BM25
 
     bm25 = BM25Manager(
-        bm25_index_path=os.path.join(Config.indexes_dir, f"{table_name}_bm25.pkl"),
-        corpus_ids_path=os.path.join(Config.indexes_dir, f"{table_name}_ids.pkl"),
+        bm25_index_path=os.path.join(indexes_dir, f"{table_name}_bm25.pkl"),
+        corpus_ids_path=os.path.join(indexes_dir, f"{table_name}_ids.pkl"),
     )
 
-    bm25_index_path = os.path.join(Config.indexes_dir, f"{table_name}_bm25.pkl")
-    corpus_ids_path = os.path.join(Config.indexes_dir, f"{table_name}_ids.pkl")
+    bm25_index_path = os.path.join(indexes_dir, f"{table_name}_bm25.pkl")
+    corpus_ids_path = os.path.join(indexes_dir, f"{table_name}_ids.pkl")
 
-    if os.path.exists(bm25_index_path) and os.path.exists(corpus_ids_path):
+    if os.path.exists(bm25_index_path) and os.path.exists(corpus_ids_path) and allow_load:
         bm25._load_index()
     else:
         bm25.initialize_index(data, columns=columns) # type: ignore
@@ -79,8 +83,8 @@ def init_index_for_table(table_name: str, hybrid: bool, columns:List[str], sql_d
 faiss_managers: Dict[str, Faiss_Manager] = {}
 bm25_managers: Dict[str, BM25Manager] = {}
 
-for table in Config.tables_to_index:
-    init_index_for_table(table_name=table.name, hybrid=table.hybrid, columns=table.columns, sql_db=sql_db)
+for table_config in Config.tables_to_index:
+    init_index_for_table(table_config, sql_db)
 
 ###############################################################################################
 ########### ROUTES
@@ -107,7 +111,7 @@ def item_to_response(item):
     return RentalListingResponse(**item)
 
 
-@app.get("/{table_name}/search", response_model=dict)
+@app.get("/indexes/{table_name}", response_model=dict)
 async def search_items(table_name: str, query: str, top: int = 10):
     """
     Do a hybrid search (BM25 + FAISS) on the named table’s indexes.
@@ -151,19 +155,49 @@ async def search_items(table_name: str, query: str, top: int = 10):
     return {"results": results}
 
 
-@app.post("/{table_name}/add_to_index") # should work also as an update
+@app.post("/indexes/{table_name}") # should work also as an update
 async def add_to_index(table_name:str, item_id:int):
 
     logger.info(f"Add called on table='{table_name}' id='{item_id}'")
 
-    if table_name not in bm25_managers:
+    for table in Config.tables_to_index:
+        if table.name == table_name:
+            table_config = table
+            break
+    else:
         raise fastapi.HTTPException(
             status_code=404,
-            detail=f"No BM25 index found for table '{table_name}'. Consider adding it to the indexes list.",
-        )
+            detail=f"No index found for table '{table_name}'. Consider adding it to the indexes list.",
+            )
+       
     bm = bm25_managers[table_name]
+    # TODO Query item from db with id
+    item = {"something query db": "db"} 
 
+    bm.add_or_update_document(item, text_fields=table_config.columns)
+
+    if table_config.hybrid:
+        faiss = faiss_managers[table_name]
+        faiss.add_or_update_item(item, table_config.columns)
+    
+    return {"message": "Item added/updated successfully."}	
+
+
+@app.post("/indexes/{table_name}/reindex")
+async def reindex_table(table_name:str):
+    table_config = Config.get_table_config(table_name) 
+
+    # clear old index instance
+    bm25_managers.pop(table_config.name)
+    if table_config.hybrid:
+        faiss_managers.pop(table_config.name)
+
+    init_index_for_table(table_config, sql_db, allow_load=False)
     
 
+@app.post("/indexes/reindex")
+async def reindex_tables():
+    for table_config in Config.tables_to_index:
+        await reindex_table(table_config.name)
 
 
