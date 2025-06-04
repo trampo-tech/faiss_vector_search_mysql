@@ -7,8 +7,9 @@ import logging
 class FilterConfig:
     column: str
     filter_type: str  # 'exact', 'range', 'in', 'like'
-    data_type: str    # 'int', 'string', 'decimal', 'enum', 'date'
-    valid_enum_values: Optional[List[str]] = None 
+    data_type: str  # 'int', 'string', 'decimal', 'enum', 'date'
+    valid_enum_values: Optional[List[str]] = None
+
 
 @dataclass(frozen=True)
 class TableConfig:
@@ -23,22 +24,35 @@ class Config:
     indexes_dir = "indexes"
 
     tables_to_index: List[TableConfig] = [
-        TableConfig(name="usuarios", columns=["nome"], hybrid=False, filters=[
-            FilterConfig("tipo_usuario", "in", "enum"),
-            FilterConfig("data_criacao", "range", "date"),
-            FilterConfig("status", "in", "enum", valid_enum_values=["disponivel", "alugado", "manutencao"]),
-
-        ]),
-        TableConfig( # Assuming 'itens' table has FULLTEXT index on titulo, descricao, condicoes_uso
-            name="itens", columns=["titulo", "descricao", "condicoes_uso"], hybrid=True,
+        TableConfig(
+            name="usuarios",
+            columns=["nome"],
+            hybrid=False,
+            filters=[
+                FilterConfig("tipo_usuario", "in", "enum"),
+                FilterConfig("data_criacao", "range", "date"),
+                FilterConfig(
+                    "status",
+                    "in",
+                    "enum",
+                    valid_enum_values=["disponivel", "alugado", "manutencao"],
+                ),
+            ],
+        ),
+        TableConfig(  # Assuming 'itens' table has FULLTEXT index on titulo, descricao, condicoes_uso
+            name="itens",
+            columns=["titulo", "descricao", "condicoes_uso"],
+            hybrid=True,
             filters=[
                 FilterConfig("categoria_id", "exact", "int"),
                 FilterConfig("categoria", "exact", "string"),
-                FilterConfig("status", "in", "enum",  valid_enum_values=["ativo", "inativo"]),
+                FilterConfig(
+                    "status", "in", "enum", valid_enum_values=["ativo", "inativo"]
+                ),
                 FilterConfig("preco_diario", "range", "decimal"),
                 FilterConfig("usuario_id", "exact", "int"),
                 FilterConfig("created_at", "range", "date"),
-            ]
+            ],
         ),
     ]
 

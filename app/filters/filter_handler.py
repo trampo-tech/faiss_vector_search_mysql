@@ -44,7 +44,9 @@ class FilterHandler:
 
     @staticmethod
     def _parse_filter_value(value: str, filter_config: FilterConfig) -> Any:
-        logger.debug(f"Parsing filter value '{value}' for column '{filter_config.column}' with type '{filter_config.filter_type}' and data_type '{filter_config.data_type}'")
+        logger.debug(
+            f"Parsing filter value '{value}' for column '{filter_config.column}' with type '{filter_config.filter_type}' and data_type '{filter_config.data_type}'"
+        )
         try:
             if filter_config.filter_type == "range":
                 # ... (your existing improved range logic) ...
@@ -55,16 +57,29 @@ class FilterHandler:
                     parts = value_str.split("-", 1)
                     min_part, max_part = parts[0].strip(), parts[1].strip()
                     if min_part:
-                        try: parsed_range["min"] = FilterHandler._convert_value(min_part, filter_config.data_type)
-                        except ValueError: return None
+                        try:
+                            parsed_range["min"] = FilterHandler._convert_value(
+                                min_part, filter_config.data_type
+                            )
+                        except ValueError:
+                            return None
                     if max_part:
-                        try: parsed_range["max"] = FilterHandler._convert_value(max_part, filter_config.data_type)
-                        except ValueError: return None
+                        try:
+                            parsed_range["max"] = FilterHandler._convert_value(
+                                max_part, filter_config.data_type
+                            )
+                        except ValueError:
+                            return None
                     return parsed_range if parsed_range else None
                 else:
-                    try: return {"exact": FilterHandler._convert_value(value_str, filter_config.data_type)}
-                    except ValueError: return None
-
+                    try:
+                        return {
+                            "exact": FilterHandler._convert_value(
+                                value_str, filter_config.data_type
+                            )
+                        }
+                    except ValueError:
+                        return None
 
             elif filter_config.filter_type == "in":
                 raw_values = [v.strip() for v in value.split(",")]
@@ -72,7 +87,10 @@ class FilterHandler:
 
                 for v_str in raw_values:
                     is_valid_for_enum = True
-                    if filter_config.data_type == "enum" and filter_config.valid_enum_values:
+                    if (
+                        filter_config.data_type == "enum"
+                        and filter_config.valid_enum_values
+                    ):
                         if v_str not in filter_config.valid_enum_values:
                             logger.warning(
                                 f"Value '{v_str}' in 'IN' clause for enum column '{filter_config.column}' "
@@ -83,52 +101,85 @@ class FilterHandler:
 
                     if is_valid_for_enum:
                         try:
-                            parsed_and_validated_values.append(FilterHandler._convert_value(v_str, filter_config.data_type))
+                            parsed_and_validated_values.append(
+                                FilterHandler._convert_value(
+                                    v_str, filter_config.data_type
+                                )
+                            )
                         except ValueError:
-                            logger.warning(f"Could not convert value '{v_str}' for column '{filter_config.column}' in IN list. Skipping value.")
+                            logger.warning(
+                                f"Could not convert value '{v_str}' for column '{filter_config.column}' in IN list. Skipping value."
+                            )
 
-                if not parsed_and_validated_values: # If all values were invalid or list became empty
-                    logger.warning(f"All values in 'IN' clause for column '{filter_config.column}' were invalid or list is empty. Ignoring filter.")
-                    return None 
-                logger.debug(f"Parsed 'in' values for '{filter_config.column}': {parsed_and_validated_values}")
+                if (
+                    not parsed_and_validated_values
+                ):  # If all values were invalid or list became empty
+                    logger.warning(
+                        f"All values in 'IN' clause for column '{filter_config.column}' were invalid or list is empty. Ignoring filter."
+                    )
+                    return None
+                logger.debug(
+                    f"Parsed 'in' values for '{filter_config.column}': {parsed_and_validated_values}"
+                )
                 return {"values": parsed_and_validated_values}
 
-            elif filter_config.filter_type in ["exact", "like"]: # "like" is unusual for strict enums
-                val_str = value.strip() # Use value.strip() for single values too
+            elif filter_config.filter_type in [
+                "exact",
+                "like",
+            ]:  # "like" is unusual for strict enums
+                val_str = value.strip()  # Use value.strip() for single values too
 
                 # Validate against predefined enum values if applicable
-                if filter_config.data_type == "enum" and filter_config.valid_enum_values:
+                if (
+                    filter_config.data_type == "enum"
+                    and filter_config.valid_enum_values
+                ):
                     if val_str not in filter_config.valid_enum_values:
                         logger.warning(
                             f"Value '{val_str}' for enum column '{filter_config.column}' is not in its "
                             f"configured valid_enum_values ({filter_config.valid_enum_values}) for table. "
                             f"Ignoring this filter component for this table."
                         )
-                        return None # This signals to parse_filters to skip this specific filter.
+                        return None  # This signals to parse_filters to skip this specific filter.
 
                 # If not an enum with validation, or if it's a valid enum value, proceed
                 try:
-                    parsed_val = FilterHandler._convert_value(val_str, filter_config.data_type)
-                    logger.debug(f"Parsed 'exact' (or 'like') value for '{filter_config.column}': {parsed_val}")
-                    return {"value": parsed_val} # For "like", SQL side would need to handle wildcards
+                    parsed_val = FilterHandler._convert_value(
+                        val_str, filter_config.data_type
+                    )
+                    logger.debug(
+                        f"Parsed 'exact' (or 'like') value for '{filter_config.column}': {parsed_val}"
+                    )
+                    return {
+                        "value": parsed_val
+                    }  # For "like", SQL side would need to handle wildcards
                 except ValueError:
-                    logger.warning(f"Could not convert value '{val_str}' for column '{filter_config.column}'. Ignoring filter.")
+                    logger.warning(
+                        f"Could not convert value '{val_str}' for column '{filter_config.column}'. Ignoring filter."
+                    )
                     return None
 
-
         except Exception as e:
-            logger.error(f"Failed to parse filter value '{value}' for column '{filter_config.column}': {e}", exc_info=True)
+            logger.error(
+                f"Failed to parse filter value '{value}' for column '{filter_config.column}': {e}",
+                exc_info=True,
+            )
             return None
         # Fallback if no condition matched (should be covered by specific type logic)
-        logger.warning(f"Filter value '{value}' for column '{filter_config.column}' did not match any parsing logic.")
+        logger.warning(
+            f"Filter value '{value}' for column '{filter_config.column}' did not match any parsing logic."
+        )
         return None
 
     @staticmethod
     def _convert_value(value: str, data_type: str) -> Any:
         """Convert string value to appropriate data type. Can raise ValueError."""
         logger.debug(f"Converting value '{value}' to data_type '{data_type}'")
-        if not value and data_type not in ['string', 'enum']: # Allow empty strings for string/enum, but not for int/decimal/date
-             raise ValueError(f"Empty value cannot be converted to {data_type}")
+        if not value and data_type not in [
+            "string",
+            "enum",
+        ]:  # Allow empty strings for string/enum, but not for int/decimal/date
+            raise ValueError(f"Empty value cannot be converted to {data_type}")
         if data_type == "int":
             return int(value)
         elif data_type == "decimal":

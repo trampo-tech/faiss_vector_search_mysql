@@ -5,14 +5,15 @@ from typing import Generator
 
 logger = logging.getLogger()
 
+
 def get_database() -> Generator[DatabaseConnector, None, None]:
     """
     FastAPI dependency that provides a database connection.
     Tests the connection on creation and ensures cleanup.
-    
+
     Returns:
         Generator[DatabaseConnector, None, None]: A generator that yields a connected database instance
-    
+
     Raises:
         Exception: If database connection cannot be established
     """
@@ -22,15 +23,15 @@ def get_database() -> Generator[DatabaseConnector, None, None]:
         database=Config.MySQL.database,
         host=Config.MySQL.host,
     )
-    
+
     db.connect()
-    
+
     if not db.connection:
         db.disconnect()
         raise Exception("Failed to connect to database or connection test failed.")
-    
+
     logger.info("Database connection established")
-    
+
     try:
         yield db
     finally:

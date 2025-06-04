@@ -15,7 +15,6 @@ app = FastAPI()
 logger = Config.init_logging()
 
 
-
 def test_initial_connection():
     """Test database connection at startup"""
     try:
@@ -101,22 +100,30 @@ for table_config in Config.tables_to_index:
 ###############################################################################################
 ########### ROUTES
 
+
 # Remove the hardcoded RentalListingResponse and replace with dynamic creation
-def create_response_model(table_name: str, sample_item: Dict[str, Any]) -> Type[BaseModel]:
+def create_response_model(
+    table_name: str, sample_item: Dict[str, Any]
+) -> Type[BaseModel]:
     """
     Dynamically create a Pydantic model based on the table structure.
-    
+
     Args:
         table_name: Name of the table
         sample_item: Sample item from the table to infer field types
-        
+
     Returns:
         Dynamically created Pydantic model class
     """
     # Define fields based on the sample item, excluding internal fields
     fields = {}
-    excluded_fields = {'embedding', 'created_at', 'updated_at', 'last_embedding_generated_at'}
-    
+    excluded_fields = {
+        "embedding",
+        "created_at",
+        "updated_at",
+        "last_embedding_generated_at",
+    }
+
     for key, value in sample_item.items():
         if key not in excluded_fields:
             # Infer type from value
@@ -128,35 +135,47 @@ def create_response_model(table_name: str, sample_item: Dict[str, Any]) -> Type[
                 fields[key] = (str, ...)
             else:
                 fields[key] = (Any, None)  # Optional field with Any type
-    
+
     # Create dynamic model
     model_name = f"{table_name.capitalize()}Response"
     return create_model(model_name, **fields)
 
+
 def item_to_response(item: Dict[str, Any], table_name: str):
     """
     Convert a database item to a dynamic response model.
-    
+
     Args:
         item: Dictionary containing item data from the database
         table_name: Name of the table to determine response structure
-        
+
     Returns:
         Dynamic Pydantic model instance with cleaned data
     """
     # Remove internal fields
     clean_item = item.copy()
-    excluded_fields = {'embedding', 'created_at', 'updated_at', 'last_embedding_generated_at'}
+    excluded_fields = {
+        "embedding",
+        "created_at",
+        "updated_at",
+        "last_embedding_generated_at",
+    }
     for field in excluded_fields:
         clean_item.pop(field, None)
-    
+
     # Create dynamic model and return instance
     ResponseModel = create_response_model(table_name, clean_item)
     return ResponseModel(**clean_item)
 
+
 @app.get("/indexes/omnisearch")
-async def omnisearch(query: str = "", top: int = 25, tables: List[str] = ["itens", "usuarios"], 
-                    filters: Optional[str] = None, db: DatabaseConnector = Depends(get_database)):
+async def omnisearch(
+    query: str = "",
+    top: int = 25,
+    tables: List[str] = ["itens", "usuarios"],
+    filters: Optional[str] = None,
+    db: DatabaseConnector = Depends(get_database),
+):
     """
     Perform search across multiple tables simultaneously with optional filters.
 
@@ -185,20 +204,27 @@ async def omnisearch(query: str = "", top: int = 25, tables: List[str] = ["itens
 
 
 @app.get("/indexes/{table_name}", response_model=dict)
-async def search_items(table_name: str, query: str = "", top: int = 50, 
-                      filters: Optional[str] = None, db: DatabaseConnector = Depends(get_database)):
+async def search_items(
+    table_name: str,
+    query: str = "",
+    top: int = 50,
+    filters: Optional[str] = None,
+    db: DatabaseConnector = Depends(get_database),
+):
     """
     Perform hybrid search with optional filters.
     If query is empty but filters are provided, returns filtered results.
-    
+
     Args:
         table_name: Name of the database table to search
         query: Search query string (can be empty)
         top: Maximum number of results to return
         filters: Filter string in format "column:value,column2:min-max,column3:val1,val2"
     """
-    logger.info(f"Search called on table='{table_name}' query='{query}' top={top}, filters='{filters}'")
-    
+    logger.info(
+        f"Search called on table='{table_name}' query='{query}' top={top}, filters='{filters}'"
+    )
+
     try:
         table_config = Config.get_table_config(table_name)
     except Exception:
@@ -206,22 +232,26 @@ async def search_items(table_name: str, query: str = "", top: int = 50,
             status_code=404,
             detail=f"No configuration found for table '{table_name}'. Cannot perform search.",
         )
-    
+
     # Parse filters
     parsed_filters = FilterHandler.parse_filters(filters or "", table_config)
     logger.debug(f"Parsed filters: {parsed_filters}")
-    
+
     # Handle empty query case
     if not query or not query.strip():
         if parsed_filters:
             # Return filtered results without search
             lexical_ids = db.get_all_with_filters(table_name, parsed_filters, top)
-            logger.debug(f"Filtered results (no query) returned {len(lexical_ids)} ids: {lexical_ids}")
+            logger.debug(
+                f"Filtered results (no query) returned {len(lexical_ids)} ids: {lexical_ids}"
+            )
         else:
             # Return all results if no query and no filters
             lexical_ids = db.get_all_with_filters(table_name, {}, top)
-            logger.debug(f"All results (no query, no filters) returned {len(lexical_ids)} ids")
-        
+            logger.debug(
+                f"All results (no query, no filters) returned {len(lexical_ids)} ids"
+            )
+
         semantic_ids = []
     else:
         # Get lexical search results with filters
@@ -230,26 +260,34 @@ async def search_items(table_name: str, query: str = "", top: int = 50,
                 table_name, table_config.columns, query, parsed_filters, top
             )
         else:
-            lexical_ids = db.search_fulltext(table_name, table_config.columns, query, top)
-        
+            lexical_ids = db.search_fulltext(
+                table_name, table_config.columns, query, top
+            )
+
         logger.debug(f"FTS returned {len(lexical_ids)} ids: {lexical_ids}")
 
         semantic_ids = []
         # Semantic search with filters
         if table_name in faiss_managers:
             fm = faiss_managers[table_name]
-            
+
             # Get filtered IDs for FAISS if filters are present
             filter_ids = None
             if parsed_filters:
                 filter_ids = db.get_filtered_ids(table_name, parsed_filters)
-                logger.debug(f"Filter IDs for FAISS: {len(filter_ids) if filter_ids else 0}")
-            
-            distances, id_matrix = fm.search_text_with_filter(query, filter_ids, top_k=top)
+                logger.debug(
+                    f"Filter IDs for FAISS: {len(filter_ids) if filter_ids else 0}"
+                )
+
+            distances, id_matrix = fm.search_text_with_filter(
+                query, filter_ids, top_k=top
+            )
             semantic_ids = [i for i in id_matrix[0].tolist() if i != -1]
             logger.debug(f"FAISS returned {len(semantic_ids)} ids: {semantic_ids}")
         else:
-            logger.info(f"FAISS index not found for table '{table_name}'. Using FTS only.")
+            logger.info(
+                f"FAISS index not found for table '{table_name}'. Using FTS only."
+            )
 
     # Combine and return results
     combined = list(dict.fromkeys(lexical_ids + semantic_ids))
@@ -270,7 +308,9 @@ async def search_items(table_name: str, query: str = "", top: int = 50,
 
 
 @app.post("/indexes/{table_name}")  # should work also as an update
-async def add_to_index(table_name: str, item_id: int, db: DatabaseConnector = Depends(get_database)):
+async def add_to_index(
+    table_name: str, item_id: int, db: DatabaseConnector = Depends(get_database)
+):
     """
     Add or update an item in the specified table's indexes.
     MySQL FTS is updated automatically by DB on data change.
@@ -303,12 +343,12 @@ async def add_to_index(table_name: str, item_id: int, db: DatabaseConnector = De
             status_code=404,
             detail=f"Item with id {item_id} not found in table {table_name}",
         )
-    item = item_list[0] # type: ignore
+    item = item_list[0]  # type: ignore
 
     if table_config.hybrid:
         # Ensure FAISS manager exists for the table
         faiss = faiss_managers[table_name]
-        faiss.add_or_update_item(item, table_config.columns) # type: ignore
+        faiss.add_or_update_item(item, table_config.columns)  # type: ignore
 
     return {"message": "Item added/updated successfully."}
 
@@ -355,5 +395,3 @@ async def reindex_tables():
         await reindex_table(table_config.name)
 
     return {"message": "All tables reindexed successfully."}
-
-
