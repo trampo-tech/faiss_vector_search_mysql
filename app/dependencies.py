@@ -1,4 +1,3 @@
-from fastapi import Depends
 from app.db.database_connector import DatabaseConnector
 from app.config import Config
 import logging
@@ -26,11 +25,11 @@ def get_database() -> Generator[DatabaseConnector, None, None]:
     
     db.connect()
     
-    if not db.test_connection():
+    if not db.connection:
         db.disconnect()
         raise Exception("Failed to connect to database or connection test failed.")
     
-    logger.info("Database connection established and tested successfully")
+    logger.info("Database connection established")
     
     try:
         yield db

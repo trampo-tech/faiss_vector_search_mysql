@@ -1,7 +1,7 @@
 import fastapi
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Dict
+from pydantic import BaseModel, create_model
+from typing import List, Dict, Any, Type
 import os
 
 from app.faiss.faissManager import Faiss_Manager
@@ -24,7 +24,8 @@ def test_initial_connection():
             database=Config.MySQL.database,
             host=Config.MySQL.host,
         )
-        if db.test_connection():
+        db.connect()
+        if db.connection:
             logger.info("Initial database connection test successful")
             return db
         else:
@@ -100,37 +101,58 @@ for table_config in Config.tables_to_index:
 ###############################################################################################
 ########### ROUTES
 
-
-class RentalListingResponse(BaseModel):
-    id: int
-    titulo: str
-    descricao: str
-    categoria: str | None = None
-    preco_diario: float
-    condicoes_uso: str | None = None
-    status: str
-    usuario_id: int
-
-
-def item_to_response(item):
+# Remove the hardcoded RentalListingResponse and replace with dynamic creation
+def create_response_model(table_name: str, sample_item: Dict[str, Any]) -> Type[BaseModel]:
     """
-    Convert a database item to a RentalListingResponse by removing internal fields.
+    Dynamically create a Pydantic model based on the table structure.
+    
+    Args:
+        table_name: Name of the table
+        sample_item: Sample item from the table to infer field types
+        
+    Returns:
+        Dynamically created Pydantic model class
+    """
+    # Define fields based on the sample item, excluding internal fields
+    fields = {}
+    excluded_fields = {'embedding', 'created_at', 'updated_at', 'last_embedding_generated_at'}
+    
+    for key, value in sample_item.items():
+        if key not in excluded_fields:
+            # Infer type from value
+            if isinstance(value, int):
+                fields[key] = (int, ...)
+            elif isinstance(value, float):
+                fields[key] = (float, ...)
+            elif isinstance(value, str):
+                fields[key] = (str, ...)
+            else:
+                fields[key] = (Any, None)  # Optional field with Any type
+    
+    # Create dynamic model
+    model_name = f"{table_name.capitalize()}Response"
+    return create_model(model_name, **fields)
 
-    Removes embedding data and timestamp fields that should not be exposed in the API response.
-
+def item_to_response(item: Dict[str, Any], table_name: str):
+    """
+    Convert a database item to a dynamic response model.
+    
     Args:
         item: Dictionary containing item data from the database
-
+        table_name: Name of the table to determine response structure
+        
     Returns:
-        RentalListingResponse: Pydantic model instance with cleaned data
+        Dynamic Pydantic model instance with cleaned data
     """
-    # Remove 'embedding' and datetime fields
-    item = item.copy()
-    item.pop("embedding", None)
-    item.pop("created_at", None)
-    item.pop("updated_at", None)
-    item.pop("last_embedding_generated_at", None)
-    return RentalListingResponse(**item)
+    # Remove internal fields
+    clean_item = item.copy()
+    excluded_fields = {'embedding', 'created_at', 'updated_at', 'last_embedding_generated_at'}
+    for field in excluded_fields:
+        clean_item.pop(field, None)
+    
+    # Create dynamic model and return instance
+    ResponseModel = create_response_model(table_name, clean_item)
+    return ResponseModel(**clean_item)
 
 
 @app.get("/indexes/{table_name}", response_model=dict)
@@ -190,7 +212,7 @@ async def search_items(table_name: str, query: str, top: int = 50, db: DatabaseC
         item["id"]: item for item in db.get_items_by_ids(table_name, combined)
     }
     results = [
-        item_to_response(fetched_items_dict[r])
+        item_to_response(fetched_items_dict[r], table_name)
         for r in combined
         if r in fetched_items_dict
     ]

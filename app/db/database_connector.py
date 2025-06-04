@@ -1,6 +1,9 @@
 import mysql.connector
 from mysql.connector import Error
 from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger()
 
 class DatabaseConnector:
     """
@@ -22,51 +25,32 @@ class DatabaseConnector:
                 database=self.database
             )
             if self.connection.is_connected():
-                print("Connected to the database.")
+                logger.info("Connected to the database.")
         except Error as e:
-            print(f"Error while connecting to database: {e}")
+            logger.error(f"Error while connecting to database: {e}")
             self.connection = None
-
-    def test_connection(self) -> bool:
-        """
-        Test if the database connection is working by executing a simple query.
-        
-        Returns:
-            bool: True if connection is working, False otherwise
-        """
-        if not self.connection or not self.connection.is_connected():
-            return False
-        
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-            return True
-        except Error as e:
-            print(f"Connection test failed: {e}")
-            return False
 
     def disconnect(self):
         if self.connection and self.connection.is_connected():
             self.connection.close()
-            print("Database connection closed.")
+            logger.info("Database connection closed.")
 
     def execute_query(self, query: str, params=None):
         if not self.connection or not self.connection.is_connected():
-            print("Not connected to the database.")
+            logger.warning("Not connected to the database.")
             return None
         cursor = self.connection.cursor(dictionary=True) # type: ignore
         try:
             cursor.execute(query, params or ())
             if query.strip().lower().startswith("select"):
                 result = cursor.fetchall()
+                logger.info(f"Found {len(result)}")
                 return result
             else:
                 self.connection.commit()
                 return cursor.rowcount
         except Error as e:
-            print(f"Error executing query: {e}")
+            logger.error(f"Error executing query: {e}")
             return None
         finally:
             cursor.close()
@@ -81,12 +65,12 @@ class DatabaseConnector:
             list: A list of dictionaries representing the rows, or None if an error occurs.
         """
         if not table_name:
-            print("Table name cannot be empty.")
+            logger.warning("Table name cannot be empty.")
             return None
         # Basic protection against SQL injection for table name,
         # ideally, table names come from a controlled source or are validated more strictly.
         if not (table_name.replace('_', '').isalnum()):
-            print(f"Invalid table name: {table_name}")
+            logger.warning(f"Invalid table name: {table_name}")
             return None
 
         query = f"SELECT * FROM {table_name}" 
@@ -104,12 +88,12 @@ class DatabaseConnector:
             list: A list containing the matching row as a dictionary, or None if an error occurs.
         """
         if not table_name:
-            print("Table name cannot be empty.")
+            logger.warning("Table name cannot be empty.")
             return None
         # Basic protection against SQL injection for table name,
         # ideally, table names come from a controlled source or are validated more strictly.
         if not (table_name.replace('_', '').isalnum()):
-             print(f"Invalid table name: {table_name}")
+             logger.warning(f"Invalid table name: {table_name}")
              return None
 
         query = f"SELECT * FROM {table_name} WHERE id = %s" 
@@ -129,12 +113,12 @@ class DatabaseConnector:
         if not ids:
             return []
         if not table_name or not (table_name.replace('_', '').isalnum()):
-            print(f"Invalid table name: {table_name}")
+            logger.warning(f"Invalid table name: {table_name}")
             return []
 
         placeholders = ','.join(['%s'] * len(ids))
         query = f"SELECT * FROM {table_name} WHERE id IN ({placeholders})"
-        return self.execute_query(query, tuple(ids)) or []
+        return self.execute_query(query, tuple(ids)) or []  # type: ignore
 
     def search_fulltext(self, table_name: str, search_columns: List[str], query_text: str, top_n: int) -> List[int]:
         """
@@ -150,12 +134,24 @@ class DatabaseConnector:
             List[int]: A list of IDs of the matching documents, ordered by relevance.
         """
         if not table_name or not (table_name.replace('_', '').isalnum()):
-            print(f"Invalid table name: {table_name}")
+            logger.warning(f"Invalid table name: {table_name}")
             return []
         if not search_columns:
-            print("Search columns cannot be empty for full-text search.")
+            logger.warning("Search columns cannot be empty for full-text search.")
             return []
+        
         columns_str = ", ".join(search_columns)
-        sql_query = f"SELECT id FROM {table_name} WHERE MATCH({columns_str}) AGAINST (%s IN NATURAL LANGUAGE MODE) LIMIT %s"
-        results = self.execute_query(sql_query, (query_text, top_n))
+        
+        # For short queries or single characters, use Boolean mode with wildcard
+        if len(query_text.strip()) <= 3:
+            # Escape special characters and add wildcard for prefix matching
+            escaped_query = query_text.replace('+', '\\+').replace('-', '\\-').replace('(', '\\(').replace(')', '\\)')
+            search_query = f"{escaped_query}*"
+            sql_query = f"SELECT id FROM {table_name} WHERE MATCH({columns_str}) AGAINST (%s IN BOOLEAN MODE) LIMIT %s"
+        else:
+            # Use natural language mode for longer queries
+            search_query = query_text
+            sql_query = f"SELECT id FROM {table_name} WHERE MATCH({columns_str}) AGAINST (%s IN NATURAL LANGUAGE MODE) LIMIT %s"
+        
+        results = self.execute_query(sql_query, (search_query, top_n))
         return [row['id'] for row in results] if results else []
