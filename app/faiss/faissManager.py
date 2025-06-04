@@ -3,6 +3,7 @@ import numpy
 from sentence_transformers import SentenceTransformer
 from app.config import Config
 import logging
+from typing import List, Optional
 
 logger = logging.getLogger()
 
@@ -81,4 +82,36 @@ class Faiss_Manager:
         embedding = self.embedding_model.encode([text])
         return self.index.search(x=embedding,k=top_k) # type: ignore # pylance complains here about something bogus
 
+    def search_text_with_filter(self, text: str, filter_ids: Optional[List[int]] = None, top_k: int = 5):
+        """
+        Search with optional ID filtering using IDSelector.
+        """
+        if not hasattr(self, 'index') or self.index is None:
+            raise ValueError("FAISS index is not initialized.")
+        
+        if self.index.ntotal == 0:
+            logger.warning("FAISS index is empty.")
+            # Return empty arrays in the shape FAISS search normally returns
+            return numpy.array([[]], dtype=numpy.float32), numpy.array([[]], dtype=numpy.int64) 
+        
+        logger.info(f"Generating embedding for query text: {text}")
+        embedding = self.embedding_model.encode([text]) # Encode returns a 2D array
+        
+        if filter_ids is not None and len(filter_ids) > 0:
+            logger.info(f"Applying filter with IDs: {filter_ids}")
+            ids_array = numpy.array(filter_ids, dtype=numpy.int64)
+            
 
+            selector = faiss.IDSelectorArray(ids_array.shape[0], faiss.swig_ptr(ids_array))
+        
+            search_params = faiss.SearchParameters() 
+            search_params.sel = selector
+            
+            logger.info("Performing filtered FAISS search.")
+            distances, indices = self.index.search(x=embedding, k=top_k, params=search_params) # type: ignore
+        else:
+            logger.info("Performing regular FAISS search without filtering.")
+            distances, indices = self.index.search(x=embedding, k=top_k) # type: ignore
+        
+        logger.info(f"FAISS search completed. Distances: {distances}, Indices: {indices}")
+        return distances, indices

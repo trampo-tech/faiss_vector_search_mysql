@@ -1,20 +1,21 @@
 import fastapi
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, create_model
-from typing import List, Dict, Any, Type
+from typing import List, Dict, Any, Type, Optional
 import os
 
 from app.faiss.faissManager import Faiss_Manager
 from app.db.database_connector import DatabaseConnector
 from app.config import Config, TableConfig
 from app.dependencies import get_database
+from app.filters.filter_handler import FilterHandler
 
 app = FastAPI()
 
 logger = Config.init_logging()
 
 
-# Test initial connection at startup
+
 def test_initial_connection():
     """Test database connection at startup"""
     try:
@@ -35,7 +36,6 @@ def test_initial_connection():
         raise e
 
 
-# Test connection at startup
 startup_db = test_initial_connection()
 
 
@@ -154,28 +154,51 @@ def item_to_response(item: Dict[str, Any], table_name: str):
     ResponseModel = create_response_model(table_name, clean_item)
     return ResponseModel(**clean_item)
 
-
-@app.get("/indexes/{table_name}", response_model=dict)
-async def search_items(table_name: str, query: str, top: int = 50, db: DatabaseConnector = Depends(get_database)):
+@app.get("/indexes/omnisearch")
+async def omnisearch(query: str = "", top: int = 25, tables: List[str] = ["itens", "usuarios"], 
+                    filters: Optional[str] = None, db: DatabaseConnector = Depends(get_database)):
     """
-    Perform hybrid search (MySQL FTS + FAISS) or FTS-only on the specified table.
+    Perform search across multiple tables simultaneously with optional filters.
 
-    Combines lexical search using MySQL Full-Text Search with semantic search
-    using FAISS embeddings if a FAISS index is available.
+    Executes the same search query against multiple specified tables and returns
+    consolidated results organized by table name. Filters apply to all tables that support them.
 
     Args:
-        table_name: Name of the database table to search (must have FTS index)
-        query: Search query string
-        top: Maximum number of results to return (default: 50)
+        query: Search query string to execute across all tables (can be empty)
+        top: Maximum number of results per table (default: 25)
+        tables: List of table names to search (default: ["itens", "usuarios"])
+        filters: Filter string in format "column:value,column2:min-max,column3:val1,val2"
 
     Returns:
-        dict: Dictionary containing 'results' key with list of matching items
-
-    Raises:
-        HTTPException: 404 if table configuration not found.
+        dict: Dictionary with table names as keys and search results as values
     """
+    result = {}
+    for table in tables:
+        try:
+            result[table] = await search_items(
+                table, query, top, filters, db
+            )  # Pass all parameters including filters
+        except HTTPException as e:
+            result[table] = {"error": e.detail, "status_code": e.status_code}
 
-    logger.info(f"Search called on table='{table_name}' query='{query}' top={top}")
+    return result
+
+
+@app.get("/indexes/{table_name}", response_model=dict)
+async def search_items(table_name: str, query: str = "", top: int = 50, 
+                      filters: Optional[str] = None, db: DatabaseConnector = Depends(get_database)):
+    """
+    Perform hybrid search with optional filters.
+    If query is empty but filters are provided, returns filtered results.
+    
+    Args:
+        table_name: Name of the database table to search
+        query: Search query string (can be empty)
+        top: Maximum number of results to return
+        filters: Filter string in format "column:value,column2:min-max,column3:val1,val2"
+    """
+    logger.info(f"Search called on table='{table_name}' query='{query}' top={top}, filters='{filters}'")
+    
     try:
         table_config = Config.get_table_config(table_name)
     except Exception:
@@ -183,31 +206,58 @@ async def search_items(table_name: str, query: str, top: int = 50, db: DatabaseC
             status_code=404,
             detail=f"No configuration found for table '{table_name}'. Cannot perform search.",
         )
-    lexical_ids = db.search_fulltext(table_name, table_config.columns, query, top)
-    logger.debug(f"FTS returned {len(lexical_ids)} ids: {lexical_ids}")
-
-    semantic_ids = []
-    # semantic search
-    if table_name in faiss_managers:
-        fm = faiss_managers[table_name]
-        distances, id_matrix = fm.search_text(query, top_k=top)
-        # Filter out -1 placeholders which indicate no item found for that slot
-        semantic_ids = [i for i in id_matrix[0].tolist() if i != -1]
-        logger.debug(f"FAISS returned {len(semantic_ids)} ids: {semantic_ids}")
+    
+    # Parse filters
+    parsed_filters = FilterHandler.parse_filters(filters or "", table_config)
+    logger.debug(f"Parsed filters: {parsed_filters}")
+    
+    # Handle empty query case
+    if not query or not query.strip():
+        if parsed_filters:
+            # Return filtered results without search
+            lexical_ids = db.get_all_with_filters(table_name, parsed_filters, top)
+            logger.debug(f"Filtered results (no query) returned {len(lexical_ids)} ids: {lexical_ids}")
+        else:
+            # Return all results if no query and no filters
+            lexical_ids = db.get_all_with_filters(table_name, {}, top)
+            logger.debug(f"All results (no query, no filters) returned {len(lexical_ids)} ids")
+        
+        semantic_ids = []
     else:
-        logger.info(
-            f"FAISS index not found or not configured for table '{table_name}'. Proceeding with FTS results only."
-        )
+        # Get lexical search results with filters
+        if parsed_filters:
+            lexical_ids = db.search_fulltext_with_filters(
+                table_name, table_config.columns, query, parsed_filters, top
+            )
+        else:
+            lexical_ids = db.search_fulltext(table_name, table_config.columns, query, top)
+        
+        logger.debug(f"FTS returned {len(lexical_ids)} ids: {lexical_ids}")
 
-    # Combine results: lexical results first, then add unique semantic results.
-    # dict.fromkeys preserves order and ensures uniqueness.
+        semantic_ids = []
+        # Semantic search with filters
+        if table_name in faiss_managers:
+            fm = faiss_managers[table_name]
+            
+            # Get filtered IDs for FAISS if filters are present
+            filter_ids = None
+            if parsed_filters:
+                filter_ids = db.get_filtered_ids(table_name, parsed_filters)
+                logger.debug(f"Filter IDs for FAISS: {len(filter_ids) if filter_ids else 0}")
+            
+            distances, id_matrix = fm.search_text_with_filter(query, filter_ids, top_k=top)
+            semantic_ids = [i for i in id_matrix[0].tolist() if i != -1]
+            logger.debug(f"FAISS returned {len(semantic_ids)} ids: {semantic_ids}")
+        else:
+            logger.info(f"FAISS index not found for table '{table_name}'. Using FTS only.")
+
+    # Combine and return results
     combined = list(dict.fromkeys(lexical_ids + semantic_ids))
     if not combined:
         return {"results": []}
 
     logger.info(f"Combined result count after deduplication: {len(combined)}")
 
-    # Fetch full item details for combined IDs
     fetched_items_dict = {
         item["id"]: item for item in db.get_items_by_ids(table_name, combined)
     }
@@ -307,30 +357,3 @@ async def reindex_tables():
     return {"message": "All tables reindexed successfully."}
 
 
-@app.get("/indexes/omnisearch")
-async def omnisearch(query: str, top: int = 25, tables: List[str] = ["itens", "users"], db: DatabaseConnector = Depends(get_database)):
-    """
-    Perform search across multiple tables simultaneously.
-
-    Executes the same search query against multiple specified tables and returns
-    consolidated results organized by table name.
-
-    Args:
-        query: Search query string to execute across all tables
-        top: Maximum number of results per table (default: 25)
-        tables: List of table names to search (default: ["itens", "users"])
-
-    Returns:
-        dict: Dictionary with table names as keys and search results as values
-    """
-    # You sure?
-    result = {}
-    for table in tables:
-        try:
-            result[table] = await search_items(
-                table, query, top, db
-            )  # Pass db parameter
-        except HTTPException as e:
-            result[table] = {"error": e.detail, "status_code": e.status_code}
-
-    return result
