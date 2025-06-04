@@ -1,27 +1,19 @@
 import fastapi
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
+import os
 
-from app.utils.faissManager import Faiss_Manager
+from app.bm25.bm25_manager import BM25Manager
+from app.faiss.faissManager import Faiss_Manager
+
 # from app.utils.simulate_sql import emulate_rental_listings_db
-from app.utils.database_connector import DatabaseConnector
-from app.config.config import Config
+from app.db.database_connector import DatabaseConnector
+from config import Config, TableConfig
 
 app = FastAPI()
 
-config = Config
-
-
-class RentalListingResponse(BaseModel):
-    id: int
-    titulo: str
-    descricao: str
-    categoria: str | None = None
-    preco_diario: float
-    condicoes_uso: str | None = None
-    status: str
-    usuario_id: int
+logger = Config.init_logging()
 
 
 sql_db = DatabaseConnector(
@@ -33,26 +25,24 @@ sql_db = DatabaseConnector(
 
 sql_db.connect()
 
-table_data_from_db = None
-if sql_db.connection and sql_db.connection.is_connected():
-    print("Attempting to fetch data from the database...")
-    table_data_from_db = sql_db.get_all_from_table("itens") 
-    if table_data_from_db:
-        print(f"Successfully fetched {len(table_data_from_db)} items from the database.")
-    else:
-        print("Could not fetch data from database, or table is empty.")
 
 table_result = table_data_from_db
 
 if not table_result:
     raise RuntimeError("Failed to load data from database for id_to_item map and Faiss.")
 
+    Args:
+        table_name: The name of the table in the SQL database to index.
+        hybrid: A boolean flag indicating whether to initialize a FAISS index
+                in addition to the BM25 index.
+        sql_db: An instance of DatabaseConnector to interact with the SQL database.
 
 faiss_manager = Faiss_Manager(dimensionality=384)
 faiss_manager.add_from_list(table_result)
 
-# Build a mapping from id to item for fast lookup
-id_to_item = {item["id"]: item for item in table_result}
+    data = sql_db.get_all_from_table(table_config.name)
+    if not data:
+        raise RuntimeError(f"No data for table '{table_name}'")
 
 def perform_mysql_fulltext_search(
     db_connector: DatabaseConnector,
@@ -171,6 +161,17 @@ def hybrid_search(
     return final_results_data  # Return the actual item data
 
 def item_to_response(item):
+    """
+    Convert a database item to a RentalListingResponse by removing internal fields.
+    
+    Removes embedding data and timestamp fields that should not be exposed in the API response.
+    
+    Args:
+        item: Dictionary containing item data from the database
+        
+    Returns:
+        RentalListingResponse: Pydantic model instance with cleaned data
+    """
     # Remove 'embedding' and datetime fields
     item = item.copy()
     item.pop("embedding", None)
@@ -183,12 +184,31 @@ def item_to_response(item):
 @app.get("/search", response_model=dict)
 async def search_items(query: str, categoria: str | None = None, status: str | None = None):  # Example filters
     """
-    Searches for items based on a query string using hybrid search.
+    Perform hybrid search (BM25 + FAISS) on the specified table's indexes.
+    
+    Combines lexical search using BM25 with semantic search using FAISS embeddings.
+    If FAISS index is not available for the table, falls back to BM25-only search.
+    
+    Args:
+        table_name: Name of the database table to search
+        query: Search query string
+        top: Maximum number of results to return (default: 50)
+        
+    Returns:
+        dict: Dictionary containing 'results' key with list of matching items
+        
+    Raises:
+        HTTPException: 404 if no BM25 index found for the specified table
     """
-    if not query:
+
+    logger.info(f"Search called on table='{table_name}' query='{query}' top={top}")
+
+    if table_name not in bm25_managers:
         raise fastapi.HTTPException(
-            status_code=400, detail="Query parameter 'query' cannot be empty."
+            status_code=404,
+            detail=f"No BM25 index found for table '{table_name}'. Cannot perform search.",
         )
+    bm = bm25_managers[table_name]
 
     # Construct metadata_filters from query parameters for lexical search
     current_lexical_filters = {}

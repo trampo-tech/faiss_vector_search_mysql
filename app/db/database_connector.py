@@ -35,7 +35,7 @@ class DatabaseConnector:
         if not self.connection or not self.connection.is_connected():
             print("Not connected to the database.")
             return None
-        cursor = self.connection.cursor(dictionary=True)
+        cursor = self.connection.cursor(dictionary=True) # type: ignore
         try:
             cursor.execute(query, params or ())
             if query.strip().lower().startswith("select"):
@@ -64,9 +64,32 @@ class DatabaseConnector:
             return None
         # Basic protection against SQL injection for table name,
         # ideally, table names come from a controlled source or are validated more strictly.
-        if not table_name.isalnum() and '_' not in table_name:
+        if not (table_name.replace('_', '').isalnum()):
+            print(f"Invalid table name: {table_name}")
+            return None
+
+        query = f"SELECT * FROM {table_name}" 
+        return self.execute_query(query)
+    
+    def get_with_id(self, id: int, table_name: str):
+        """
+        Retrieves a single row from a specified table by ID.
+
+        Args:
+            id (int): The ID of the row to fetch.
+            table_name (str): The name of the table to fetch data from.
+
+        Returns:
+            list: A list containing the matching row as a dictionary, or None if an error occurs.
+        """
+        if not table_name:
+            print("Table name cannot be empty.")
+            return None
+        # Basic protection against SQL injection for table name,
+        # ideally, table names come from a controlled source or are validated more strictly.
+        if not (table_name.replace('_', '').isalnum()):
              print(f"Invalid table name: {table_name}")
              return None
 
-        query = f"SELECT * FROM {table_name}"
-        return self.execute_query(query)
+        query = f"SELECT * FROM {table_name} WHERE id = %s" 
+        return self.execute_query(query, (id,))
