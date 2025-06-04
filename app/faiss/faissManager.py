@@ -1,7 +1,7 @@
 import faiss
 import numpy
 from sentence_transformers import SentenceTransformer
-from app.config.config import Config
+from app.config import Config
 import logging
 
 logger = logging.getLogger()

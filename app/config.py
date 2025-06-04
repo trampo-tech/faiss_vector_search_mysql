@@ -16,7 +16,7 @@ class Config:
 
     tables_to_index: List[TableConfig] = [
         TableConfig(name="usuarios", columns=["nome"], hybrid=False),
-        TableConfig(
+        TableConfig( # Assuming 'itens' table has FULLTEXT index on titulo, descricao, condicoes_uso
             name="itens", columns=["titulo", "descricao", "condicoes_uso"], hybrid=True
         ),
     ]
@@ -31,7 +31,7 @@ class Config:
 
     class MySQL:
         user = "root"
-        password = "ROOT"
+        password = ""
         database = "alugo"
         host = "localhost"
 
