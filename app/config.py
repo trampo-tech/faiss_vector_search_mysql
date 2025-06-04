@@ -1,6 +1,14 @@
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import List, Optional
 import logging
+
+
+@dataclass(frozen=True)
+class FilterConfig:
+    column: str
+    filter_type: str  # 'exact', 'range', 'in', 'like'
+    data_type: str  # 'int', 'string', 'decimal', 'enum', 'date'
+    valid_enum_values: Optional[List[str]] = None
 
 
 @dataclass(frozen=True)
@@ -8,6 +16,7 @@ class TableConfig:
     name: str
     columns: List[str]
     hybrid: bool
+    filters: Optional[List[FilterConfig]] = field(default_factory=lambda: [])
 
 
 class Config:
@@ -15,9 +24,35 @@ class Config:
     indexes_dir = "indexes"
 
     tables_to_index: List[TableConfig] = [
-        TableConfig(name="usuarios", columns=["nome"], hybrid=False),
         TableConfig(
-            name="itens", columns=["titulo", "descricao", "condicoes_uso"], hybrid=True
+            name="usuarios",
+            columns=["nome"],
+            hybrid=False,
+            filters=[
+                FilterConfig("tipo_usuario", "in", "enum"),
+                FilterConfig("data_criacao", "range", "date"),
+                FilterConfig(
+                    "status",
+                    "in",
+                    "enum",
+                    valid_enum_values=["disponivel", "alugado", "manutencao"],
+                ),
+            ],
+        ),
+        TableConfig(  # Assuming 'itens' table has FULLTEXT index on titulo, descricao, condicoes_uso
+            name="itens",
+            columns=["titulo", "descricao", "condicoes_uso"],
+            hybrid=True,
+            filters=[
+                FilterConfig("categoria_id", "exact", "int"),
+                FilterConfig("categoria", "exact", "string"),
+                FilterConfig(
+                    "status", "in", "enum", valid_enum_values=["ativo", "inativo"]
+                ),
+                FilterConfig("preco_diario", "range", "decimal"),
+                FilterConfig("usuario_id", "exact", "int"),
+                FilterConfig("created_at", "range", "date"),
+            ],
         ),
     ]
 
@@ -31,7 +66,7 @@ class Config:
 
     class MySQL:
         user = "root"
-        password = "ROOT"
+        password = ""
         database = "alugo"
         host = "localhost"
 
