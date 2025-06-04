@@ -17,22 +17,19 @@ logger = Config.init_logging()
 
 
 sql_db = DatabaseConnector(
-    user="root", password="ROOT", database="alugo", host="localhost"
+    user=Config.MySQL.user,
+    password=Config.MySQL.password,
+    database=Config.MySQL.database,
+    host=Config.MySQL.host
 )
 
 sql_db.connect()
 
 
-def init_index_for_table(
-    table_config: TableConfig, sql_db: DatabaseConnector, allow_load: bool = True
-):
-    """
-    Initializes FAISS and/or BM25 indexes for a given database table.
+table_result = table_data_from_db
 
-    This function retrieves all data from the specified table. If `hybrid` is True,
-    it attempts to load or create a FAISS index. It always attempts to load or
-    create a BM25 index. The created/loaded index managers are stored in
-    global dictionaries `faiss_managers` and `bm25_managers`.
+if not table_result:
+    raise RuntimeError("Failed to load data from database for id_to_item map and Faiss.")
 
     Args:
         table_name: The name of the table in the SQL database to index.
@@ -40,72 +37,128 @@ def init_index_for_table(
                 in addition to the BM25 index.
         sql_db: An instance of DatabaseConnector to interact with the SQL database.
 
-    Raises:
-        RuntimeError: If no data is found in the specified table.
-    """
-    table_name = table_config.name
-    columns = table_config.columns
-    indexes_dir = Config.indexes_dir
+faiss_manager = Faiss_Manager(dimensionality=384)
+faiss_manager.add_from_list(table_result)
 
     data = sql_db.get_all_from_table(table_config.name)
     if not data:
         raise RuntimeError(f"No data for table '{table_name}'")
 
-    # 2) FAISS
-    if table_config.hybrid:
-        fm = Faiss_Manager(dimensionality=384)
-        faiss_path = os.path.join(Config.indexes_dir, f"{table_name}.index")
+def perform_mysql_fulltext_search(
+    db_connector: DatabaseConnector,
+    query_text: str,
+    top_k: int,
+    metadata_filters: dict | None = None
+) -> List[dict]:  # Returns list of dicts like {'id': X, 'score': Y}
+    """
+    Performs a MySQL FULLTEXT search with optional metadata filters.
+    """
+    # Base query parts
+    select_clause = "SELECT id, MATCH(titulo, descricao) AGAINST(%s IN NATURAL LANGUAGE MODE) AS score"
+    from_clause = "FROM itens"
+    # Main FULLTEXT search condition
+    where_match_clause = "WHERE MATCH(titulo, descricao) AGAINST(%s IN NATURAL LANGUAGE MODE)"
 
-        if os.path.exists(faiss_path) and allow_load:
-            fm.load_from_file(faiss_path)
-            logger.info(f"Loaded index from {faiss_path}.")
-        else:
-            fm.add_from_list(data, text_fields=columns)  # type: ignore
-            fm.save_to_file(faiss_path)
+    params = [query_text, query_text]  # Params for the two AGAINST clauses
 
-        faiss_managers[table_name] = fm
-        # 3) BM25
+    filter_sql_parts = []
+    if metadata_filters:
+        for key, value in metadata_filters.items():
+            # Basic protection: ensure key is alphanumeric with underscores if dynamic
+            # For production, validate keys against a known list of filterable columns
+            if key.replace('_', '').isalnum():
+                filter_sql_parts.append(f"AND {key} = %s")
+                params.append(value)
 
-    bm25 = BM25Manager(
-        bm25_index_path=os.path.join(indexes_dir, f"{table_name}_bm25.pkl"),
-        corpus_ids_path=os.path.join(indexes_dir, f"{table_name}_ids.pkl"),
+    # Combine WHERE clauses
+    full_where_clause = where_match_clause
+    if filter_sql_parts:
+        full_where_clause += " " + " ".join(filter_sql_parts)
+
+    # Add HAVING clause to ensure only relevant results (score > 0)
+    # MATCH in WHERE usually implies this, but explicit HAVING can be clearer
+    # or useful if you only put MATCH in SELECT for scoring all rows.
+    # For now, relying on MATCH in WHERE to filter non-matches.
+    # You could add: "HAVING score > 0" if needed.
+
+    order_by_limit_clause = "ORDER BY score DESC LIMIT %s"
+    params.append(top_k)
+
+    final_sql = f"{select_clause} {from_clause} {full_where_clause} {order_by_limit_clause}"
+
+    # For debugging:
+    # print(f"Executing FTS SQL: {final_sql}")
+    # print(f"With params: {tuple(params)}")
+
+    try:
+        results = db_connector.execute_query(final_sql, tuple(params))
+        if results:
+            return [{"id": int(row["id"]), "score": float(row["score"])} for row in results]
+    except Exception as e:
+        print(f"Error during MySQL FTS query: {e}")  # Add proper logging
+    return []
+
+def hybrid_search(
+    query_text: str,
+    db_connector: DatabaseConnector,       # ADD THIS PARAMETER (or access sql_db globally)
+    faiss_manager_instance: Faiss_Manager,
+    id_lookup_map: dict,  # Was data_source, now explicitly for item lookup
+    target_top_n: int = 10,
+    initial_candidate_pool_multiplier: int = 3,  # Adjust as needed
+    metadata_filters: dict | None = None,
+):
+    """Combines MySQL FULLTEXT lexical and Faiss semantic search results."""
+
+    candidate_fetch_k = target_top_n * initial_candidate_pool_multiplier
+
+    # --- Lexical Search using MySQL FULLTEXT ---
+    lexical_results_with_scores = perform_mysql_fulltext_search(
+        db_connector=db_connector,  # Use the passed connector
+        query_text=query_text,
+        top_k=candidate_fetch_k,
+        metadata_filters=metadata_filters  # Pass along filters
+    )
+    lexical_ids = [res['id'] for res in lexical_results_with_scores]
+    print(f"Lexical (MySQL FTS) search found IDs: {lexical_ids}")
+    # You can also retain lexical_results_with_scores if you want to use FTS scores in ranking
+
+    # --- Semantic Search (No change here) ---
+    semantic_distances, semantic_ids_matrix = faiss_manager_instance.search_text(
+        query_text, top_k=candidate_fetch_k  # Also fetch more for potential re-ranking/filtering
+    )
+    semantic_ids = semantic_ids_matrix[0].tolist()
+    semantic_ids = [int(id_) for id_ in semantic_ids if id_ != -1]  # Ensure IDs are int
+    print(
+        f"Semantic search found IDs: {semantic_ids} with distances: {semantic_distances[0]}"
     )
 
-    bm25_index_path = os.path.join(indexes_dir, f"{table_name}_bm25.pkl")
-    corpus_ids_path = os.path.join(indexes_dir, f"{table_name}_ids.pkl")
+    # --- Combine and De-duplicate Results ---
+    # Simple combination for now. Consider scores for more advanced ranking.
+    combined_ids_ordered = []
+    seen_ids = set()
 
-    if (
-        os.path.exists(bm25_index_path)
-        and os.path.exists(corpus_ids_path)
-        and allow_load
-    ):
-        bm25._load_index()
-    else:
-        bm25.initialize_index(data, columns=columns)  # type: ignore
-        bm25_managers[table_name] = bm25
+    # Add lexical results first (maintaining some order)
+    for id_val in lexical_ids:
+        if id_val not in seen_ids:
+            combined_ids_ordered.append(id_val)
+            seen_ids.add(id_val)
 
+    # Add semantic results that are not already included
+    for id_val in semantic_ids:
+        if id_val not in seen_ids:
+            combined_ids_ordered.append(id_val)
+            seen_ids.add(id_val)
 
-# init indexes
-faiss_managers: Dict[str, Faiss_Manager] = {}
-bm25_managers: Dict[str, BM25Manager] = {}
+    # --- Fetch full item data for the combined unique IDs ---
+    final_results_data = []
+    for res_id in combined_ids_ordered[:target_top_n]:  # Limit to target_top_n after combining
+        item_data = id_lookup_map.get(res_id)
+        if item_data:
+            final_results_data.append(item_data)
+        else:
+            print(f"Warning: ID {res_id} not found in id_lookup_map.")
 
-for table_config in Config.tables_to_index:
-    init_index_for_table(table_config, sql_db)
-
-###############################################################################################
-########### ROUTES
-
-
-class RentalListingResponse(BaseModel):
-    id: int
-    titulo: str
-    descricao: str
-    categoria: str | None = None
-    preco_diario: float
-    condicoes_uso: str | None = None
-    status: str
-    usuario_id: int
-
+    return final_results_data  # Return the actual item data
 
 def item_to_response(item):
     """
@@ -128,8 +181,8 @@ def item_to_response(item):
     return RentalListingResponse(**item)
 
 
-@app.get("/indexes/{table_name}", response_model=dict)
-async def search_items(table_name: str, query: str, top: int = 50):
+@app.get("/search", response_model=dict)
+async def search_items(query: str, categoria: str | None = None, status: str | None = None):  # Example filters
     """
     Perform hybrid search (BM25 + FAISS) on the specified table's indexes.
     
@@ -157,139 +210,30 @@ async def search_items(table_name: str, query: str, top: int = 50):
         )
     bm = bm25_managers[table_name]
 
-    # lexical search
-    lexical_ids = bm.search(query, top_n=top)
-    logger.debug(f"BM25 returned {len(lexical_ids)} ids: {lexical_ids}")
+    # Construct metadata_filters from query parameters for lexical search
+    current_lexical_filters = {}
+    if categoria:
+        current_lexical_filters["categoria"] = categoria
+    if status:
+        current_lexical_filters["status"] = status
+    # Add more filters as needed, ensuring they match column names in 'itens'
 
-    semantic_ids = []
-    # semantic search
-    if table_name in faiss_managers:
-        fm = faiss_managers[table_name]
-        distances, id_matrix = fm.search_text(query, top_k=top)
-        # Filter out -1 placeholders which indicate no item found for that slot
-        semantic_ids = [i for i in id_matrix[0].tolist() if i != -1]
-        logger.debug(f"FAISS returned {len(semantic_ids)} ids: {semantic_ids}")
-    else:
-        logger.info(
-            f"FAISS index not found for table '{table_name}'. Proceeding with BM25 results only."
-        )
+    results_data = hybrid_search(
+        query_text=query,
+        db_connector=sql_db,  # Pass the global sql_db instance
+        faiss_manager_instance=faiss_manager,
+        id_lookup_map=id_to_item,
+        target_top_n=10,  # Desired final number of results
+        initial_candidate_pool_multiplier=3,  # Fetch 3x more candidates initially
+        metadata_filters=current_lexical_filters if current_lexical_filters else None,
+    )
 
-    # Combine results: lexical results first, then add unique semantic results.
-    # dict.fromkeys preserves order and ensures uniqueness.
-    combined = list(dict.fromkeys(lexical_ids + semantic_ids))
-    logger.info(f"Combined result count after deduplication: {len(combined)}")
+    api_results = [item_to_response(item) for item in results_data]
+    if not api_results:
+        return {"message": "No results found matching your criteria.", "results": []}
 
-    # Assuming 'id_to_item' is accessible and correctly populated for the items of the current 'table_name'.
-    # This part remains unchanged from your original snippet.
-    results = [item_to_response(id_to_item[r]) for r in combined if r in id_to_item]
-    return {"results": results}
-
-
-@app.post("/indexes/{table_name}")  # should work also as an update
-async def add_to_index(table_name: str, item_id: int):
-    """
-    Add or update an item in the specified table's indexes.
-    
-    Updates both BM25 and FAISS indexes (if hybrid mode is enabled) with the
-    specified item from the database.
-    
-    Args:
-        table_name: Name of the database table
-        item_id: ID of the item to add/update in the indexes
-        
-    Returns:
-        dict: Success message confirming the operation
-        
-    Raises:
-        HTTPException: 404 if no index configuration found for the specified table
-    """
-    logger.info(f"Add called on table='{table_name}' id='{item_id}'")
-
-    for table in Config.tables_to_index:
-        if table.name == table_name:
-            table_config = table
-            break
-    else:
-        raise fastapi.HTTPException(
-            status_code=404,
-            detail=f"No index found for table '{table_name}'. Consider adding it to the indexes list.",
-        )
-
-    bm = bm25_managers[table_name]
-    
-    item = sql_db.get_with_id(item_id, table_name) # TODO Look better into this
-
-    bm.add_or_update_document(item, text_fields=table_config.columns)
-
-    if table_config.hybrid:
-        faiss = faiss_managers[table_name]
-        faiss.add_or_update_item(item, table_config.columns)
-
-    return {"message": "Item added/updated successfully."}
-
-
-@app.post("/indexes/{table_name}/reindex")
-async def reindex_table(table_name: str):
-    """
-    Completely rebuild indexes for a specific table.
-    
-    Clears existing indexes and rebuilds them from scratch using current database data.
-    This operation may take time for large datasets.
-    
-    Args:
-        table_name: Name of the database table to reindex
-        
-    Returns:
-        dict: Success message confirming the reindex operation
-    """
-    table_config = Config.get_table_config(table_name)
-
-    # clear old index instance
-    bm25_managers.pop(table_config.name)
-    if table_config.hybrid:
-        faiss_managers.pop(table_config.name)
-
-    init_index_for_table(table_config, sql_db, allow_load=False)
-
-    return {"message": f"{table_name} reindexed successfully."}
-
-
-@app.post("/indexes/reindex")
-async def reindex_tables():
-    """
-    Rebuild indexes for all configured tables.
-    
-    Performs a complete reindex operation on all tables defined in the configuration.
-    This is a time-intensive operation that should be used sparingly.
-    
-    Returns:
-        dict: Success message confirming all tables have been reindexed
-    """
-    for table_config in Config.tables_to_index:
-        await reindex_table(table_config.name)
-
-    return {"message": "All tables reindexed successfully."}
-
-
-@app.get("/indexes/omnisearch")
-async def omnisearch(query: str, top: int = 25, tables: List[str] = ["itens", "users"]):
-    """
-    Perform search across multiple tables simultaneously.
-    
-    Executes the same search query against multiple specified tables and returns
-    consolidated results organized by table name.
-    
-    Args:
-        query: Search query string to execute across all tables
-        top: Maximum number of results per table (default: 25)
-        tables: List of table names to search (default: ["itens", "users"])
-        
-    Returns:
-        dict: Dictionary with table names as keys and search results as values
-    """
-    # You sure?
-    result = {}
-    for table in tables:
-        result[table] = search_items(table, query, top)
-
-    return result
+    # Optionally, include applied filters in the response for clarity
+    response_payload = {"results": api_results}
+    if current_lexical_filters:
+        response_payload["filters_applied"] = current_lexical_filters
+    return response_payload
