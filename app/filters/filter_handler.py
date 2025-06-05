@@ -26,7 +26,7 @@ class FilterHandler:
             return {}
 
         parsed_filters = {}
-        filter_pairs = filters_param.split(",")
+        filter_pairs = filters_param.split(";")
 
         available_filters = {f.column: f for f in table_config.filters}
 
@@ -99,7 +99,7 @@ class FilterHandler:
 
             elif filter_config.filter_type == "in":
                 # value is already lowercased. Split parts are inherently lowercase.
-                raw_values = [v.strip() for v in value.split(" ")]
+                raw_values = [v.strip() for v in value.split(",")]
                 parsed_and_validated_values = []
 
                 for v_str in raw_values: # v_str is already lowercase
