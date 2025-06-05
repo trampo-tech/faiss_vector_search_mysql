@@ -39,7 +39,7 @@ class FilterHandler:
 
             if parsed_value is not None:
                 parsed_filters[column] = parsed_value
-
+        logger.debug(f"Got the following parsed filters:{parsed_filters}")
         return parsed_filters
 
     @staticmethod
@@ -82,7 +82,7 @@ class FilterHandler:
                         return None
 
             elif filter_config.filter_type == "in":
-                raw_values = [v.strip() for v in value.split(",")]
+                raw_values = [v.strip() for v in value.split(" ")]
                 parsed_and_validated_values = []
 
                 for v_str in raw_values:
@@ -129,7 +129,6 @@ class FilterHandler:
             ]:  # "like" is unusual for strict enums
                 val_str = value.strip()  # Use value.strip() for single values too
 
-                # Validate against predefined enum values if applicable
                 if (
                     filter_config.data_type == "enum"
                     and filter_config.valid_enum_values

@@ -168,6 +168,63 @@ def item_to_response(item: Dict[str, Any], table_name: str):
     return ResponseModel(**clean_item)
 
 
+async def _reindex_table_internal(table_name: str, db: DatabaseConnector):
+    """
+    Internal function to reindex a single table.
+    Separated from the route handler to allow direct calls.
+    """
+    table_config = Config.get_table_config(table_name)
+
+    if table_config.hybrid:
+        # Clear old FAISS index instance if it exists
+        faiss_managers.pop(table_config.name, None)
+
+    init_index_for_table(table_config, db, allow_load=False)
+
+@app.post("/indexes/reindex")
+async def reindex_tables(db: DatabaseConnector = Depends(get_database)):
+    """
+    Rebuild FAISS indexes for all configured hybrid tables.
+    MySQL FTS is handled by the database.
+
+    Performs a complete reindex operation on all tables defined in the configuration.
+    This is a time-intensive operation that should be used sparingly.
+
+    Returns:
+        dict: Success message confirming all tables have been reindexed
+    """
+    for table_config in Config.tables_to_index:
+        await _reindex_table_internal(table_config.name, db)
+
+    return {"message": "All tables reindexed successfully."}
+
+
+@app.post("/indexes/{table_name}/reindex")
+async def reindex_table(table_name: str, db: DatabaseConnector = Depends(get_database)):
+    """
+    Completely rebuild FAISS index for a specific table if hybrid.
+    MySQL FTS re-indexing is typically handled by the DB (e.g., OPTIMIZE TABLE).
+
+    Clears existing indexes and rebuilds them from scratch using current database data.
+    This operation may take time for large datasets.
+
+    Args:
+        table_name: Name of the database table to reindex
+
+    Returns:
+        dict: Success message confirming the reindex operation
+    """
+    table_config = Config.get_table_config(table_name)
+
+    if table_config.hybrid:
+        # Clear old FAISS index instance if it exists
+        faiss_managers.pop(table_config.name, None)
+
+    init_index_for_table(table_config, db, allow_load=False)
+
+    return {"message": f"{table_name} reindexed successfully."}
+
+
 @app.get("/indexes/omnisearch")
 async def omnisearch(
     query: str = "",
@@ -353,45 +410,4 @@ async def add_to_index(
     return {"message": "Item added/updated successfully."}
 
 
-@app.post("/indexes/{table_name}/reindex")
-async def reindex_table(table_name: str, db: DatabaseConnector = Depends(get_database)):
-    """
-    Completely rebuild FAISS index for a specific table if hybrid.
-    MySQL FTS re-indexing is typically handled by the DB (e.g., OPTIMIZE TABLE).
 
-    Clears existing indexes and rebuilds them from scratch using current database data.
-    This operation may take time for large datasets.
-
-    Args:
-        table_name: Name of the database table to reindex
-
-    Returns:
-        dict: Success message confirming the reindex operation
-    """
-    table_config = Config.get_table_config(table_name)
-
-    if table_config.hybrid:
-        # Clear old FAISS index instance if it exists
-        faiss_managers.pop(table_config.name, None)
-
-    init_index_for_table(table_config, db, allow_load=False)
-
-    return {"message": f"{table_name} reindexed successfully."}
-
-
-@app.post("/indexes/reindex")
-async def reindex_tables():
-    """
-    Rebuild FAISS indexes for all configured hybrid tables.
-    MySQL FTS is handled by the database.
-
-    Performs a complete reindex operation on all tables defined in the configuration.
-    This is a time-intensive operation that should be used sparingly.
-
-    Returns:
-        dict: Success message confirming all tables have been reindexed
-    """
-    for table_config in Config.tables_to_index:
-        await reindex_table(table_config.name)
-
-    return {"message": "All tables reindexed successfully."}

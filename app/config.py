@@ -23,6 +23,12 @@ class Config:
     embed_model = "sentence-transformers/all-MiniLM-L6-v2"
     indexes_dir = "indexes"
 
+    class MySQL:
+        user = "root"
+        password = ""
+        database = "alugo"
+        host = "localhost"
+
     tables_to_index: List[TableConfig] = [
         TableConfig(
             name="usuarios",
@@ -35,7 +41,7 @@ class Config:
                     "status",
                     "in",
                     "enum",
-                    valid_enum_values=["disponivel", "alugado", "manutencao"],
+                    valid_enum_values=["ativo", "inativo"],
                 ),
             ],
         ),
@@ -45,9 +51,9 @@ class Config:
             hybrid=True,
             filters=[
                 FilterConfig("categoria_id", "exact", "int"),
-                FilterConfig("categoria", "exact", "string"),
+                FilterConfig("categoria", "in", "string"),
                 FilterConfig(
-                    "status", "in", "enum", valid_enum_values=["ativo", "inativo"]
+                    "status", "in", "enum", valid_enum_values=["disponivel", "alugado", "manutencao"]
                 ),
                 FilterConfig("preco_diario", "range", "decimal"),
                 FilterConfig("usuario_id", "exact", "int"),
@@ -64,14 +70,8 @@ class Config:
         else:
             raise Exception(f"Did not find config for {table_name}")
 
-    class MySQL:
-        user = "root"
-        password = ""
-        database = "alugo"
-        host = "localhost"
-
     @classmethod
-    def init_logging(cls, logging_level: int = logging.ERROR) -> logging.Logger:
+    def init_logging(cls, logging_level: int = logging.DEBUG) -> logging.Logger:
         logging.basicConfig(
             level=logging_level,
             format="%(asctime)s - %(levelname)s - %(message)s",
