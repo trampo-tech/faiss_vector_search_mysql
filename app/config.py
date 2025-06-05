@@ -71,7 +71,7 @@ class Config:
             raise Exception(f"Did not find config for {table_name}")
 
     @classmethod
-    def init_logging(cls, logging_level: int = logging.DEBUG) -> logging.Logger:
+    def init_logging(cls, logging_level: int = logging.WARNING) -> logging.Logger:
         logging.basicConfig(
             level=logging_level,
             format="%(asctime)s - %(levelname)s - %(message)s",

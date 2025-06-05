@@ -13,6 +13,14 @@ class FilterHandler:
         """
         Parse filter string into structured filters.
         Expected format: "status:disponivel,preco_diario:10-50,categoria_id:1,2,3"
+        The returned structure for each filter will be:
+        {
+            "column_name": {
+                "filter_data": { ... parsed value like {"values": [...]} or {"min": ..., "max": ...} ... },
+                "data_type": "string" | "int" | "decimal" | "date" | "enum",
+                "filter_type": "exact" | "in" | "range" | "like"
+            }
+        }
         """
         if not filters_param or not table_config.filters:
             return {}
@@ -26,32 +34,40 @@ class FilterHandler:
             if ":" not in pair:
                 continue
 
-            column, value = pair.split(":", 1)
+            column, value_str = pair.split(":", 1)
             column = column.strip()
-            value = value.strip()
+            # Do not lowercase column name
+            # Lowercase only the value part of the filter
+            value_str = value_str.strip().lower() # Lowercase the value string here
 
             if column not in available_filters:
                 logger.warning(f"Filter column '{column}' not configured for table")
                 continue
 
             filter_config = available_filters[column]
-            parsed_value = FilterHandler._parse_filter_value(value, filter_config)
+            # Pass the already lowercased value_str to _parse_filter_value
+            parsed_value_data = FilterHandler._parse_filter_value(value_str, filter_config)
 
-            if parsed_value is not None:
-                parsed_filters[column] = parsed_value
+            if parsed_value_data is not None:
+                parsed_filters[column] = {
+                    "filter_data": parsed_value_data,
+                    "data_type": filter_config.data_type,
+                    "filter_type": filter_config.filter_type,
+                }
         logger.debug(f"Got the following parsed filters:{parsed_filters}")
         return parsed_filters
 
     @staticmethod
     def _parse_filter_value(value: str, filter_config: FilterConfig) -> Any:
+        # value parameter is already lowercased by the caller (parse_filters)
         logger.debug(
             f"Parsing filter value '{value}' for column '{filter_config.column}' with type '{filter_config.filter_type}' and data_type '{filter_config.data_type}'"
         )
         try:
             if filter_config.filter_type == "range":
                 # ... (your existing improved range logic) ...
-                # Example for range (ensure it returns None on failure, which is handled by parse_filters)
-                value_str = value.strip()
+                # value is already lowercased, but range parsing deals with numbers or dates mostly
+                value_str = value # Already lowercase
                 parsed_range = {}
                 if "-" in value_str:
                     parts = value_str.split("-", 1)
@@ -82,16 +98,21 @@ class FilterHandler:
                         return None
 
             elif filter_config.filter_type == "in":
+                # value is already lowercased. Split parts are inherently lowercase.
                 raw_values = [v.strip() for v in value.split(" ")]
                 parsed_and_validated_values = []
 
-                for v_str in raw_values:
+                for v_str in raw_values: # v_str is already lowercase
                     is_valid_for_enum = True
                     if (
                         filter_config.data_type == "enum"
                         and filter_config.valid_enum_values
                     ):
-                        if v_str not in filter_config.valid_enum_values:
+                        # Compare lowercase v_str with lowercase valid_enum_values
+                        lowercase_valid_enum_values = [
+                            ve.lower() for ve in filter_config.valid_enum_values
+                        ]
+                        if v_str not in lowercase_valid_enum_values:
                             logger.warning(
                                 f"Value '{v_str}' in 'IN' clause for enum column '{filter_config.column}' "
                                 f"is not in its configured valid_enum_values ({filter_config.valid_enum_values}) "
@@ -127,13 +148,17 @@ class FilterHandler:
                 "exact",
                 "like",
             ]:  # "like" is unusual for strict enums
-                val_str = value.strip()  # Use value.strip() for single values too
+                val_str = value # value is already lowercased
 
                 if (
                     filter_config.data_type == "enum"
                     and filter_config.valid_enum_values
                 ):
-                    if val_str not in filter_config.valid_enum_values:
+                    # Compare lowercase val_str with lowercase valid_enum_values
+                    lowercase_valid_enum_values = [
+                        ve.lower() for ve in filter_config.valid_enum_values
+                    ]
+                    if val_str not in lowercase_valid_enum_values:
                         logger.warning(
                             f"Value '{val_str}' for enum column '{filter_config.column}' is not in its "
                             f"configured valid_enum_values ({filter_config.valid_enum_values}) for table. "
@@ -173,6 +198,9 @@ class FilterHandler:
     @staticmethod
     def _convert_value(value: str, data_type: str) -> Any:
         """Convert string value to appropriate data type. Can raise ValueError."""
+        # value parameter is already lowercased by _parse_filter_value,
+        # which received it lowercased from parse_filters.
+        # This is fine for string/enum. For numeric/date, case doesn't matter.
         logger.debug(f"Converting value '{value}' to data_type '{data_type}'")
         if not value and data_type not in [
             "string",

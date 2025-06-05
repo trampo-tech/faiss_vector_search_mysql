@@ -22,7 +22,7 @@ class Faiss_Manager:
         self.index = faiss.read_index(path)
 
     def _add_text(self, text: str, item_id: int):
-        embedding = self.embedding_model.encode([text])
+        embedding = self.embedding_model.encode([text.lower()])  # Lowercase text
         # FAISS expects IDs to be a numpy array of int64
         ids_to_add = numpy.array([item_id], dtype=numpy.int64)
         self.index.add_with_ids(embedding, ids_to_add)  # type: ignore # pylance complains here about something bogus
@@ -36,7 +36,7 @@ class Faiss_Manager:
             texts_to_join = []
             for field in text_fields:
                 if field in item and item[field] is not None:
-                    texts_to_join.append(str(item[field]))
+                    texts_to_join.append(str(item[field]).lower())  # Lowercase field text
                 else:
                     logger.warning(
                         f"Warning: Field '{field}' not found or is None in item with id {item.get('id', 'Unknown')}. Skipping field."
@@ -64,7 +64,7 @@ class Faiss_Manager:
         texts_to_join = []
         for field in text_fields:
             if field in item and item[field] is not None:
-                texts_to_join.append(str(item[field]))
+                texts_to_join.append(str(item[field]).lower())  # Lowercase field text
             else:
                 logger.warning(
                     f"Field '{field}' not found or is None in item with id {item_id}. Skipping field."
@@ -91,7 +91,7 @@ class Faiss_Manager:
         self._add_text(text_to_embed, item_id)
 
     def search_text(self, text: str, top_k: int = 5):
-        embedding = self.embedding_model.encode([text])
+        embedding = self.embedding_model.encode([text.lower()])  # Lowercase query text
         return self.index.search(x=embedding, k=top_k)  # type: ignore # pylance complains here about something bogus
 
     def search_text_with_filter(
@@ -111,7 +111,7 @@ class Faiss_Manager:
             )
 
         logger.info(f"Generating embedding for query text: {text}")
-        embedding = self.embedding_model.encode([text])  # Encode returns a 2D array
+        embedding = self.embedding_model.encode([text.lower()])  # Lowercase query text, Encode returns a 2D array
 
         if filter_ids is not None and len(filter_ids) > 0:
             logger.info(f"Applying filter with IDs: {filter_ids}")

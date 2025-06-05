@@ -249,10 +249,11 @@ async def omnisearch(
         dict: Dictionary with table names as keys and search results as values
     """
     result = {}
+    processed_query = query.lower() if query else ""
     for table in tables:
         try:
             result[table] = await search_items(
-                table, query, top, filters, db
+                table, processed_query, top, filters, db
             )  # Pass all parameters including filters
         except HTTPException as e:
             result[table] = {"error": e.detail, "status_code": e.status_code}
@@ -278,8 +279,9 @@ async def search_items(
         top: Maximum number of results to return
         filters: Filter string in format "column:value,column2:min-max,column3:val1,val2"
     """
+    processed_query = query.lower() if query else ""
     logger.info(
-        f"Search called on table='{table_name}' query='{query}' top={top}, filters='{filters}'"
+        f"Search called on table='{table_name}' query='{processed_query}' top={top}, filters='{filters}'"
     )
 
     try:
@@ -295,7 +297,7 @@ async def search_items(
     logger.debug(f"Parsed filters: {parsed_filters}")
 
     # Handle empty query case
-    if not query or not query.strip():
+    if not processed_query or not processed_query.strip():
         if parsed_filters:
             # Return filtered results without search
             lexical_ids = db.get_all_with_filters(table_name, parsed_filters, top)
@@ -314,11 +316,11 @@ async def search_items(
         # Get lexical search results with filters
         if parsed_filters:
             lexical_ids = db.search_fulltext_with_filters(
-                table_name, table_config.columns, query, parsed_filters, top
+                table_name, table_config.columns, processed_query, parsed_filters, top
             )
         else:
             lexical_ids = db.search_fulltext(
-                table_name, table_config.columns, query, top
+                table_name, table_config.columns, processed_query, top
             )
 
         logger.debug(f"FTS returned {len(lexical_ids)} ids: {lexical_ids}")
@@ -337,7 +339,7 @@ async def search_items(
                 )
 
             distances, id_matrix = fm.search_text_with_filter(
-                query, filter_ids, top_k=top
+                processed_query, filter_ids, top_k=top
             )
             semantic_ids = [i for i in id_matrix[0].tolist() if i != -1]
             logger.debug(f"FAISS returned {len(semantic_ids)} ids: {semantic_ids}")

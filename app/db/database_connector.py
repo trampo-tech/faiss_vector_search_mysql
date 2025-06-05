@@ -265,21 +265,28 @@ class DatabaseConnector:
         logger.debug(f"Building filter conditions for: {filters}")
         conditions = []
         params = []
-        for column, filter_detail in filters.items():
-            logger.debug(f"Processing filter for column '{column}': {filter_detail}")
-            if not isinstance(
-                filter_detail, dict
-            ):  # Should always be a dict from FilterHandler
+        for column, filter_detail_wrapper in filters.items(): # Renamed to avoid confusion
+            logger.debug(f"Processing filter for column '{column}': {filter_detail_wrapper}")
+
+            if not isinstance(filter_detail_wrapper, dict) or "filter_data" not in filter_detail_wrapper:
                 logger.warning(
-                    f"Unexpected filter_detail format for column '{column}': {filter_detail}. Skipping."
+                    f"Unexpected filter_detail_wrapper format or missing 'filter_data' for column '{column}': {filter_detail_wrapper}. Skipping."
                 )
                 continue
+
+            filter_detail = filter_detail_wrapper["filter_data"] # Get the actual filter data
+            if not isinstance(filter_detail, dict):
+                 logger.warning(
+                    f"'filter_data' is not a dictionary for column '{column}': {filter_detail}. Skipping."
+                )
+                 continue
+
 
             if "values" in filter_detail:
                 value_list = filter_detail["values"]
                 if value_list:
                     placeholders = ", ".join(["%s"] * len(value_list))
-                    condition_sql = f"{column} IN ({placeholders})"
+                    condition_sql = f"`{column}` IN ({placeholders})" # Use backticks for column name
                     conditions.append(condition_sql)
                     params.extend(value_list)
                     logger.debug(
@@ -290,67 +297,64 @@ class DatabaseConnector:
                         f"  -> Skipped IN condition for column '{column}' due to empty value list."
                     )
 
-            # Range handling (covers min_only, max_only, min_and_max)
             elif "min" in filter_detail and "max" in filter_detail:
                 min_val = filter_detail["min"]
                 max_val = filter_detail["max"]
-                # Condition for min
-                conditions.append(f"{column} >= %s")
+                conditions.append(f"`{column}` >= %s") # Use backticks
                 params.append(min_val)
-                # Condition for max
-                conditions.append(f"{column} <= %s")
+                conditions.append(f"`{column}` <= %s") # Use backticks
                 params.append(max_val)
                 logger.debug(
-                    f"  -> Built RANGE condition: {column} >= {min_val} AND {column} <= {max_val}. Params added: [{min_val}, {max_val}]"
+                    f"  -> Built RANGE condition: `{column}` >= {min_val} AND `{column}` <= {max_val}. Params added: [{min_val}, {max_val}]"
                 )
-            elif "min" in filter_detail:  # Only min is present
+            elif "min" in filter_detail:
                 min_val = filter_detail["min"]
-                condition_sql = f"{column} >= %s"
+                condition_sql = f"`{column}` >= %s" # Use backticks
                 conditions.append(condition_sql)
                 params.append(min_val)
                 logger.debug(
                     f"  -> Built MIN_ONLY range condition: {condition_sql}, Param added: {min_val}"
                 )
-            elif "max" in filter_detail:  # Only max is present
+            elif "max" in filter_detail:
                 max_val = filter_detail["max"]
-                condition_sql = f"{column} <= %s"
+                condition_sql = f"`{column}` <= %s" # Use backticks
                 conditions.append(condition_sql)
                 params.append(max_val)
                 logger.debug(
                     f"  -> Built MAX_ONLY range condition: {condition_sql}, Param added: {max_val}"
                 )
-
-            # Exact match for a field that might otherwise be a range, or specific "exact" type
             elif "exact" in filter_detail:
                 exact_val = filter_detail["exact"]
-                condition_sql = f"{column} = %s"
+                condition_sql = f"`{column}` = %s" # Use backticks
                 conditions.append(condition_sql)
                 params.append(exact_val)
                 logger.debug(
                     f"  -> Built EXACT condition: {condition_sql}, Param added: {exact_val}"
                 )
-
-            # For string/enum exact matches (typically filter_type "exact" or "like" from FilterConfig)
-            elif "value" in filter_detail:
+            elif "value" in filter_detail: # For string/enum exact matches
                 val = filter_detail["value"]
-                condition_sql = f"{column} = %s"  # Assuming '=' for "value" key based on previous setup
-                # If "like" is intended, this would need to be column LIKE %s
+                # Assuming filter_type from filter_detail_wrapper could be used here if 'LIKE' is needed
+                # filter_type = filter_detail_wrapper.get("filter_type")
+                # if filter_type == "like":
+                #    condition_sql = f"`{column}` LIKE %s"
+                #    # val = f"%{val}%" # Add wildcards if needed, depends on FilterHandler logic
+                # else:
+                condition_sql = f"`{column}` = %s" # Use backticks
                 conditions.append(condition_sql)
                 params.append(val)
                 logger.debug(
                     f"  -> Built VALUE condition (assuming '='): {condition_sql}, Param added: {val}"
                 )
             else:
-                # This case handles if filter_detail was an empty dict or an unrecognized structure.
                 logger.warning(
-                    f"Unknown or empty filter structure for column '{column}': {filter_detail}. Skipping."
+                    f"Unknown or empty filter data structure in 'filter_data' for column '{column}': {filter_detail}. Skipping."
                 )
 
         final_conditions_sql = " AND ".join(conditions)
         logger.debug(
             f"Finished building filter conditions. SQL: '{final_conditions_sql}', Params: {params}"
         )
-        return final_conditions_sql, params
+        return final_conditions_sql, params 
 
     def get_filtered_ids(self, table_name: str, filters: Dict[str, Any]) -> List[int]:
         """
