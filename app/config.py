@@ -17,6 +17,8 @@ class TableConfig:
     columns: List[str]
     hybrid: bool
     filters: Optional[List[FilterConfig]] = field(default_factory=lambda: [])
+    latitude_column: Optional[str]= None
+    longitude_column: Optional[str]= None
 
 
 class Config:
@@ -49,12 +51,15 @@ class Config:
             name="itens",
             columns=["titulo", "descricao", "condicoes_uso"],
             hybrid=True,
+            latitude_column="itens_latitude",  # Specify your actual latitude column name
+            longitude_column="itens_longitude",
             filters=[
                 FilterConfig("categoria_id", "exact", "int"),
                 FilterConfig("categoria", "in", "string"),
                 FilterConfig(
                     "status", "in", "enum", valid_enum_values=["disponivel", "alugado", "manutencao"]
                 ),
+                FilterConfig("localizacao", "distance", "geo"),
                 FilterConfig("preco_diario", "range", "decimal"),
                 FilterConfig("usuario_id", "exact", "int"),
                 FilterConfig("created_at", "range", "date"),

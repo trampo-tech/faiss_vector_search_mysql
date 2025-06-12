@@ -97,10 +97,6 @@ faiss_managers: Dict[str, Faiss_Manager] = {}
 for table_config in Config.tables_to_index:
     init_index_for_table(table_config, startup_db)
 
-###############################################################################################
-########### ROUTES
-
-
 # Remove the hardcoded RentalListingResponse and replace with dynamic creation
 def create_response_model(
     table_name: str, sample_item: Dict[str, Any]
@@ -139,6 +135,9 @@ def create_response_model(
     # Create dynamic model
     model_name = f"{table_name.capitalize()}Response"
     return create_model(model_name, **fields)
+
+###############################################################################################
+########### ROUTES
 
 
 def item_to_response(item: Dict[str, Any], table_name: str):
